@@ -596,7 +596,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
 # Include the router
 app.include_router(api_router)
 
-# CORS
+# CORS and Security Middleware
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
@@ -604,6 +604,17 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Add security headers
+@app.middleware("http")
+async def add_security_headers(request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Content-Security-Policy"] = "default-src 'self'"
+    return response
 
 # Logging
 logging.basicConfig(
