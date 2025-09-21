@@ -373,7 +373,9 @@ metadata:
   run_ui: true
 
 test_plan:
-  current_focus: []
+  current_focus:
+    - "AI Response Length Validation Fix"
+    - "Production Security Headers"
   stuck_tasks:
     - "WebSocket Real-time Communication"
   test_all: false
