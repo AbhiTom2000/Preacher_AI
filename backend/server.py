@@ -309,85 +309,137 @@ def detect_language(text: str) -> str:
     hindi_chars = any('\u0900' <= char <= '\u097F' for char in text)
     return "hindi" if hindi_chars else "english"
 
-# API Routes
+# Enhanced API Routes with better error handling and validation
 @api_router.post("/chat", response_model=dict)
+@rate_limit()
 async def chat_endpoint(message: dict):
-    """Handle chat messages"""
+    """Handle chat messages with enhanced validation and error handling"""
     try:
-        user_message = message.get('message', '')
-        session_id = message.get('session_id', str(uuid.uuid4()))
+        # Validate input
+        user_message = message.get('message', '').strip()
+        session_id = message.get('session_id', '')
+        
+        if not user_message:
+            raise HTTPException(status_code=400, detail="Message cannot be empty")
+        
+        if not session_id or not validate_session_id(session_id):
+            raise HTTPException(status_code=400, detail="Invalid session ID")
+        
+        # Sanitize input
+        user_message = sanitize_input(user_message)
         language = detect_language(user_message)
         
+        # Validate session exists
+        session_exists = await db.chat_sessions.find_one({"id": session_id})
+        if not session_exists:
+            # Create session if it doesn't exist
+            session = ChatSession(id=session_id, language=language)
+            session_dict = prepare_for_mongo(session.dict())
+            await db.chat_sessions.insert_one(session_dict)
+        
         # Save user message
-        user_msg = ChatMessage(
-            session_id=session_id,
-            message=user_message,
-            sender="user",
-            language=language
-        )
-        user_msg_dict = prepare_for_mongo(user_msg.dict())
-        await db.chat_messages.insert_one(user_msg_dict)
+        try:
+            user_msg = ChatMessage(
+                session_id=session_id,
+                message=user_message,
+                sender="user",
+                language=language
+            )
+            user_msg_dict = prepare_for_mongo(user_msg.dict())
+            await db.chat_messages.insert_one(user_msg_dict)
+        except Exception as e:
+            logging.error(f"Error saving user message: {e}")
+            raise HTTPException(status_code=500, detail="Error saving message")
         
         # Get AI response
         biblical_response = await get_biblical_guidance(user_message, session_id, language)
         
         # Save AI response
-        ai_msg = ChatMessage(
-            session_id=session_id,
-            message=biblical_response.response,
-            sender="ai",
-            language=language,
-            cited_verses=biblical_response.cited_verses
-        )
-        ai_msg_dict = prepare_for_mongo(ai_msg.dict())
-        await db.chat_messages.insert_one(ai_msg_dict)
+        try:
+            ai_msg = ChatMessage(
+                session_id=session_id,
+                message=biblical_response.response,
+                sender="ai",
+                language=language,
+                cited_verses=biblical_response.cited_verses
+            )
+            ai_msg_dict = prepare_for_mongo(ai_msg.dict())
+            await db.chat_messages.insert_one(ai_msg_dict)
+        except Exception as e:
+            logging.error(f"Error saving AI message: {e}")
+            # Continue even if save fails, user still gets response
         
         return {
             "response": biblical_response.response,
             "cited_verses": biblical_response.cited_verses,
             "session_id": session_id,
-            "language": language
+            "language": language,
+            "status": "success"
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
         logging.error(f"Error in chat endpoint: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail="Internal server error occurred")
 
 @api_router.get("/chat/{session_id}", response_model=List[dict])
 async def get_chat_history(session_id: str):
-    """Get chat history for a session"""
+    """Get chat history for a session with validation"""
     try:
+        # Validate session ID
+        if not validate_session_id(session_id):
+            raise HTTPException(status_code=400, detail="Invalid session ID format")
+        
+        # Get messages with limit to prevent large responses
         messages = await db.chat_messages.find(
             {"session_id": session_id}
-        ).sort("timestamp", 1).to_list(1000)
+        ).sort("timestamp", 1).limit(200).to_list(200)
         
         # Clean up MongoDB ObjectId and other non-serializable fields
         cleaned_messages = []
         for msg in messages:
-            # Remove MongoDB ObjectId
-            if '_id' in msg:
-                del msg['_id']
-            # Parse datetime fields
-            msg = parse_from_mongo(msg)
-            cleaned_messages.append(msg)
+            try:
+                # Remove MongoDB ObjectId
+                if '_id' in msg:
+                    del msg['_id']
+                # Parse datetime fields
+                msg = parse_from_mongo(msg)
+                cleaned_messages.append(msg)
+            except Exception as e:
+                logging.warning(f"Error processing message: {e}")
+                continue
         
         return cleaned_messages
+        
+    except HTTPException:
+        raise
     except Exception as e:
         logging.error(f"Error getting chat history: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail="Error retrieving chat history")
 
 @api_router.post("/session", response_model=dict)
 async def create_session():
-    """Create a new chat session"""
+    """Create a new chat session with error handling"""
     try:
         session = ChatSession()
         session_dict = prepare_for_mongo(session.dict())
-        await db.chat_sessions.insert_one(session_dict)
         
-        return {"session_id": session.id}
+        result = await db.chat_sessions.insert_one(session_dict)
+        if not result.inserted_id:
+            raise HTTPException(status_code=500, detail="Failed to create session")
+        
+        return {
+            "session_id": session.id,
+            "status": "success",
+            "created_at": session.created_at.isoformat()
+        }
+        
+    except HTTPException:
+        raise
     except Exception as e:
         logging.error(f"Error creating session: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail="Error creating session")
 
 @api_router.get("/")
 async def root():
