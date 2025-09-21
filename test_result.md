@@ -287,14 +287,9 @@ metadata:
   run_ui: true
 
 test_plan:
-  current_focus:
-    - "Google Gemini AI Integration for Biblical Guidance"
-    - "Chat API Endpoints (/api/chat, /api/session, /api/chat/history)"
+  current_focus: []
+  stuck_tasks:
     - "WebSocket Real-time Communication"
-    - "MongoDB Chat History Storage"
-    - "Bible Verse Citation System"
-    - "Multi-language Support (English/Hindi)"
-  stuck_tasks: []
   test_all: false
   test_priority: "high_first"
 
