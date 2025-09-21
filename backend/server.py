@@ -78,31 +78,6 @@ hindi_index, hindi_verse_map = create_faiss_index(hindi_verses_data)
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
 
-# WebSocket connections manager
-class ConnectionManager:
-    def __init__(self):
-        self.active_connections: List[WebSocket] = []
-
-    async def connect(self, websocket: WebSocket):
-        await websocket.accept()
-        self.active_connections.append(websocket)
-
-    def disconnect(self, websocket: WebSocket):
-        if websocket in self.active_connections:
-            self.active_connections.remove(websocket)
-
-    async def send_personal_message(self, message: str, websocket: WebSocket):
-        await websocket.send_text(message)
-
-    async def broadcast(self, message: str):
-        for connection in self.active_connections:
-            try:
-                await connection.send_text(message)
-            except:
-                self.disconnect(connection)
-
-manager = ConnectionManager()
-
 # Rate limiting setup
 rate_limit_storage = defaultdict(list)
 RATE_LIMIT_REQUESTS = 10  # requests per minute
@@ -619,53 +594,7 @@ async def stream_chat_updates(session_id: str):
         }
     )
 
-# WebSocket endpoint (keeping for compatibility but will fallback to SSE)
-@app.websocket("/ws/{session_id}")
-async def websocket_endpoint(websocket: WebSocket, session_id: str):
-    """WebSocket endpoint - fallback implementation"""
-    try:
-        await manager.connect(websocket)
-        
-        # Send connection confirmation
-        await websocket.send_text(json.dumps({
-            "type": "connected",
-            "message": "WebSocket connected successfully",
-            "session_id": session_id,
-            "note": "Using WebSocket fallback mode"
-        }))
-        
-        while True:
-            data = await websocket.receive_text()
-            message_data = json.loads(data)
-            
-            # Process the message (similar to chat endpoint)
-            user_message = message_data.get('message', '')
-            language = detect_language(user_message)
-            
-            # Send typing indicator
-            await websocket.send_text(json.dumps({
-                "type": "typing",
-                "message": "Preacher.ai is thinking..."
-            }))
-            
-            # Get biblical guidance
-            biblical_response = await get_biblical_guidance(user_message, session_id, language)
-            
-            # Send response
-            response_data = {
-                "type": "message",
-                "response": biblical_response.response,
-                "cited_verses": biblical_response.cited_verses,
-                "session_id": session_id,
-                "language": language
-            }
-            
-            await websocket.send_text(json.dumps(response_data))
-            
-    except Exception as e:
-        logging.error(f"WebSocket error: {e}")
-    finally:
-        manager.disconnect(websocket)
+
 
 # Include the router
 app.include_router(api_router)
