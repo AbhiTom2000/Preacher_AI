@@ -17,6 +17,9 @@ import re
 from functools import wraps
 import time
 from collections import defaultdict
+import numpy as np
+from sentence_transformers import SentenceTransformer
+import faiss
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -25,6 +28,51 @@ load_dotenv(ROOT_DIR / '.env')
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
+
+# Load Bible verse data
+print("Loading Bible verses...")
+try:
+    with open('storage\english_bible_verses.json', 'r') as f:
+        english_verses_data = json.load(f)
+    with open('storage\hindi_bible_verses.json', 'r') as f:
+        hindi_verses_data = json.load(f)
+    print("Bible verse data loaded successfully.")
+except FileNotFoundError:
+    logging.error("Bible verse JSON files not found. Please ensure they are in the backend directory.")
+    english_verses_data = []
+    hindi_verses_data = []
+
+# Initialize Sentence Transformer model
+# This model needs to be downloaded, a process that can take a while
+print("Loading Sentence Transformer model...")
+try:
+    model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
+    print("Sentence Transformer model loaded successfully.")
+except Exception as e:
+    logging.error(f"Error loading sentence transformer model: {e}")
+    model = None
+
+# Function to create FAISS index
+def create_faiss_index(verses_data):
+    if not verses_data or not model:
+        return None, {}
+
+    verses = [v['text'] for v in verses_data]
+    verse_map = {i: v for i, v in enumerate(verses_data)}
+
+    print(f"Creating embeddings for {len(verses)} verses...")
+    embeddings = model.encode(verses, convert_to_numpy=True)
+
+    dimension = embeddings.shape[1]
+    index = faiss.IndexFlatL2(dimension)
+    index.add(embeddings)
+
+    print("FAISS index created successfully.")
+    return index, verse_map
+
+# Create English and Hindi indexes
+english_index, english_verse_map = create_faiss_index(english_verses_data)
+hindi_index, hindi_verse_map = create_faiss_index(hindi_verses_data)
 
 # Create the main app
 app = FastAPI()
@@ -206,33 +254,50 @@ def parse_from_mongo(item):
                     pass
     return item
 
-# Bible API integration
+# Bible files through JSON files
 async def get_bible_verses(query: str, language: str = "english"):
-    """Get relevant Bible verses using ESV API"""
+    """
+    Get relevant Bible verses using semantic search on pre-built FAISS indices.
+    """
     try:
-        # For demo purposes, return sample verses
-        # In production, integrate with ESV API or Bible Gateway
-        sample_verses = {
-            "english": [
-                {
-                    "reference": "Philippians 4:6-7",
-                    "text": "Do not be anxious about anything, but in every situation, by prayer and petition, with thanksgiving, present your requests to God. And the peace of God, which transcends all understanding, will guard your hearts and your minds in Christ Jesus."
-                },
-                {
-                    "reference": "Matthew 11:28",
-                    "text": "Come to me, all you who are weary and burdened, and I will give you rest."
-                }
-            ],
-            "hindi": [
-                {
-                    "reference": "फिलिप्पियों 4:6-7",
-                    "text": "किसी भी बात की चिन्ता मत करो, परन्तु हर परिस्थिति में प्रार्थना और विनती के द्वारा धन्यवाद के साथ अपनी विनतियाँ परमेश्वर के सामने प्रस्तुत करो।"
-                }
-            ]
-        }
-        return sample_verses.get(language, sample_verses["english"])
+        # Use appropriate index based on language
+        if language == "hindi":
+            index = hindi_index
+            verse_map = hindi_verse_map
+        else:
+            index = english_index
+            verse_map = english_verse_map
+
+        if index is None or model is None:
+            logging.warning("FAISS index or model not available. Returning empty list.")
+            return []
+
+        # Create embedding for the user query
+        query_embedding = model.encode([query], convert_to_numpy=True)
+
+        # Search the index for the top 5 most similar verses
+        # The 'I' contains the indices of the most similar vectors
+        D, I = index.search(query_embedding, k=5)
+
+        # Extract the actual verse data based on the indices
+        results = []
+        for i, distance in zip(I[0], D[0]):
+            # Implement similarity thresholding
+            if distance < 10.0:  # A lower distance means higher similarity
+                verse = verse_map[i]
+                results.append({
+                    "reference": f"{verse['book']} {verse['chapter']}:{verse['verse']}",
+                    "text": verse['text'],
+                    "score": float(distance)
+                })
+
+        if not results:
+            logging.info(f"No relevant verses found for query: {query}")
+
+        return results
+
     except Exception as e:
-        logging.error(f"Error fetching Bible verses: {e}")
+        logging.error(f"Error fetching Bible verses with semantic search: {e}")
         return []
 
 # Enhanced AI Integration with better error handling
@@ -247,7 +312,7 @@ async def get_biblical_guidance(user_message: str, session_id: str, language: st
                 language=language
             )
         
-        gemini_key = os.environ.get('GEMINI_API_KEY')
+        gemini_key = os.environ.get('AIzaSyCmcN182FLYXYXdRmwbwTOAquJcBrhifCU')
         if not gemini_key:
             logging.error("Gemini API key not configured")
             return BiblicalResponse(
@@ -257,32 +322,41 @@ async def get_biblical_guidance(user_message: str, session_id: str, language: st
             )
 
         # Enhanced system prompt for better biblical guidance
-        system_message = f"""You are Preacher.ai, a compassionate and wise AI assistant that provides biblical guidance.
+        system_message = f"""You are Preacher.ai, a gentle spiritual companion who responds with the heart of a caring pastor.
 
-Your role:
-- Provide thoughtful, biblical guidance based on Scripture
-- Always cite relevant Bible verses in your responses
-- Be encouraging, loving, and spiritually uplifting
-- Respond in {language}
-- Keep responses between 150-300 words for optimal readability
+**RESPONSE FORMAT** - Use "The Gentle Guide" structure:
 
-Guidelines:
-- Focus on practical application of biblical principles
-- Use warm, pastoral tone
-- Address spiritual concerns with empathy
-- Include 1-3 relevant Bible verses with clear references
-- Avoid denominational controversies
-- Emphasize God's love, grace, and wisdom
+🤲 **Personal Acknowledgment**: Begin with warm personal acknowledgment of their struggle/question (1 line only)
+💙 **Heart-Centered Opening**: Offer heart-centered opening that validates their experience  (1 line only)
+📖 **Sacred Scripture**: Share 1-2 relevant scriptures with gentle context (*always italicize verse references and quotes*)
+🌱 **Practical Wisdom**: Provide practical, grace-filled wisdom they can apply today
+✨ **Encouraging Affirmation**: Give encouraging affirmation of their worth and God's love
+🙏 **Personal Blessing**: Close with a personal prayer or blessing 
 
-When citing verses, reference them clearly in your response with format: [Book Chapter:Verse]
+**FORMATTING GUIDELINES**:
+- **Bold** all section emojis and key spiritual concepts
+- *Italicize* all Bible verse references (e.g., *John 14:27*)
+- *Italicize* all direct scripture quotes (e.g., *"Peace I leave with you..."*)
+- Use **bold** for emphasis on important spiritual truths
+- Create visual breathing space with gentle pauses (...)
 
-Example topics you help with:
-- Finding peace in difficult times
-- Understanding forgiveness
-- Dealing with anxiety and worry
-- Spiritual growth and faith
-- Relationships and love
-- Purpose and meaning in life"""
+**TONE GUIDELINES**:
+- Speak as if sitting beside them in a quiet sanctuary
+- Use "**dear friend**," "**precious soul**," "**beloved**" naturally
+- Never preach AT them, always walk WITH them
+- Include gentle pauses (...) for reflection
+- End with **specific, personal blessings**
+
+**LENGTH**: 150-250 words for optimal heart connection
+
+**HEART-TOUCH**: Make them feel **seen**, **valued**, and **loved** by God
+
+**SCRIPTURE CITATION EXAMPLES**:
+- *Philippians 4:6-7* reminds us that *"Do not be anxious about anything..."*
+- In *Matthew 11:28*, Jesus tenderly invites us: *"Come to me, all you who are weary..."*
+- The psalmist declares in *Psalm 23:4*: *"Even though I walk through the darkest valley..."*
+
+Remember: Every response should feel like a **personal letter from a loving pastor** who truly understands their heart."""
 
         # Initialize Gemini chat with timeout
         chat = LlmChat(
