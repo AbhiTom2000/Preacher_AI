@@ -392,11 +392,12 @@ async def chat_endpoint(message: dict):
         # Get AI response
         biblical_response = await get_biblical_guidance(user_message, session_id, language)
         
-        # Save AI response
+        # Save AI response with proper validation
         try:
+            ai_response_text = validate_and_prepare_message(biblical_response.response, "ai")
             ai_msg = ChatMessage(
                 session_id=session_id,
-                message=biblical_response.response,
+                message=ai_response_text,
                 sender="ai",
                 language=language,
                 cited_verses=biblical_response.cited_verses
