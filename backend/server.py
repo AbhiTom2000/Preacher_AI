@@ -235,7 +235,17 @@ async def get_chat_history(session_id: str):
             {"session_id": session_id}
         ).sort("timestamp", 1).to_list(1000)
         
-        return [parse_from_mongo(msg) for msg in messages]
+        # Clean up MongoDB ObjectId and other non-serializable fields
+        cleaned_messages = []
+        for msg in messages:
+            # Remove MongoDB ObjectId
+            if '_id' in msg:
+                del msg['_id']
+            # Parse datetime fields
+            msg = parse_from_mongo(msg)
+            cleaned_messages.append(msg)
+        
+        return cleaned_messages
     except Exception as e:
         logging.error(f"Error getting chat history: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
