@@ -46,35 +46,21 @@ const LoadingSkeleton = () => {
   );
 };
 
-const QuickStarters = ({ onQuestionSelect }) => {
-  const questions = [
-    "How can I find peace in difficult times?",
-    "What does the Bible say about forgiveness?",
-    "Help me with anxiety and worry",
-    "How to strengthen my faith?",
-    "What is God's purpose for my life?",
-    "How to pray effectively?"
-  ];
-
+const CategoryCard = ({ icon, title, description, onClick, large = false }) => {
   return (
-    <div className="quick-starters">
-      <h3>Ask Preacher.ai</h3>
-      <div className="starter-questions">
-        {questions.map((question, index) => (
-          <button
-            key={index}
-            className="starter-question"
-            onClick={() => onQuestionSelect(question)}
-          >
-            {question}
-          </button>
-        ))}
-      </div>
+    <div 
+      className={`category-card ${large ? 'large' : ''}`}
+      onClick={onClick}
+    >
+      <div className="category-icon">{icon}</div>
+      <h3 className="category-title">{title}</h3>
+      <p className="category-description">{description}</p>
     </div>
   );
 };
 
 function App() {
+  const [currentView, setCurrentView] = useState('home'); // 'home', 'chat', 'explore'
   const [messages, setMessages] = useState([]);
   const [citedVerses, setCitedVerses] = useState([]);
   const [inputMessage, setInputMessage] = useState('');
@@ -83,6 +69,7 @@ function App() {
   const [showVerses, setShowVerses] = useState(false);
   const [isDarkTheme, setIsDarkTheme] = useState(true);
   const [language, setLanguage] = useState('english');
+  const [userName] = useState('Friend'); // Could be dynamic
   
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
@@ -178,31 +165,251 @@ function App() {
     setLanguage(language === 'english' ? 'hindi' : 'english');
   };
 
+  const startTapToChat = () => {
+    setCurrentView('chat');
+    setMessages([]);
+    setCitedVerses([]);
+  };
+
+  const handleCategoryClick = (category) => {
+    setCurrentView('chat');
+    
+    const categoryQuestions = {
+      'Peace & Comfort': "How can I find peace and comfort in difficult times?",
+      'Forgiveness': "What does the Bible teach about forgiveness?",
+      'Faith & Trust': "How can I strengthen my faith and trust in God?",
+      'Prayer': "How can I improve my prayer life?",
+      'Purpose': "What is God's purpose for my life?",
+      'Relationships': "What does the Bible say about relationships and love?",
+      'Anxiety': "How can I overcome anxiety and worry through faith?",
+      'Wisdom': "How can I gain biblical wisdom for decisions?"
+    };
+    
+    const question = categoryQuestions[category] || `Tell me about ${category} from a biblical perspective.`;
+    sendMessage(question);
+  };
+
+  const backToHome = () => {
+    setCurrentView('home');
+    setShowVerses(false);
+  };
+
+  // Home View
+  if (currentView === 'home') {
+    return (
+      <div className={`app ${isDarkTheme ? 'dark-theme' : 'light-theme'}`}>
+        {/* Header */}
+        <header className="app-header">
+          <div className="header-content">
+            <div className="user-greeting">
+              <div className="user-avatar">🙏</div>
+              <div className="invite-section">
+                <button className="invite-btn">+ Invite</button>
+                <button className="menu-btn">☰</button>
+              </div>
+            </div>
+            <div className="header-controls">
+              <button 
+                className="language-toggle"
+                onClick={toggleLanguage}
+                title="Switch Language"
+              >
+                {language === 'english' ? 'हिं' : 'EN'}
+              </button>
+              <button 
+                className="theme-toggle"
+                onClick={toggleTheme}
+                title="Toggle Theme"
+              >
+                {isDarkTheme ? '☀️' : '🌙'}
+              </button>
+            </div>
+          </div>
+        </header>
+
+        {/* Main Content */}
+        <main className="main-content">
+          {/* Greeting */}
+          <div className="greeting-section">
+            <h1>Hi, {userName} 👋</h1>
+          </div>
+
+          {/* Tap to Chat Section */}
+          <div className="tap-chat-section" onClick={startTapToChat}>
+            <div className="chat-circle">
+              <div className="audio-waves">
+                <span></span>
+                <span></span>
+                <span></span>
+                <span></span>
+                <span></span>
+              </div>
+            </div>
+            <h2>Tap to chat</h2>
+            <p>Get biblical guidance and wisdom</p>
+          </div>
+
+          {/* Explore Section */}
+          <div className="explore-section">
+            <div className="section-header">
+              <h2>Explore</h2>
+              <button 
+                className="explore-all-btn"
+                onClick={() => setCurrentView('explore')}
+              >
+                View All
+              </button>
+            </div>
+            
+            <div className="categories-grid-home">
+              <CategoryCard
+                icon="☮️"
+                title="Peace & Comfort"
+                description="Find peace in difficult times through Scripture"
+                onClick={() => handleCategoryClick('Peace & Comfort')}
+              />
+              <CategoryCard
+                icon="💝"
+                title="Forgiveness"
+                description="Learn about God's forgiveness and grace"
+                onClick={() => handleCategoryClick('Forgiveness')}
+              />
+            </div>
+          </div>
+
+          {/* Bottom Navigation */}
+          <nav className="bottom-nav">
+            <button className="nav-item active">
+              <span className="nav-icon">⚪</span>
+            </button>
+            <button className="nav-item">
+              <span className="nav-icon">🎤</span>
+            </button>
+            <button className="nav-item">
+              <span className="nav-icon">👁️</span>
+            </button>
+            <button className="nav-item">
+              <span className="nav-icon">🎯</span>
+            </button>
+          </nav>
+        </main>
+      </div>
+    );
+  }
+
+  // Explore View
+  if (currentView === 'explore') {
+    return (
+      <div className={`app ${isDarkTheme ? 'dark-theme' : 'light-theme'}`}>
+        {/* Header */}
+        <header className="app-header">
+          <div className="header-content">
+            <button className="back-btn" onClick={backToHome}>←</button>
+            <h1>Explore</h1>
+            <div className="header-controls">
+              <button 
+                className="language-toggle"
+                onClick={toggleLanguage}
+                title="Switch Language"
+              >
+                {language === 'english' ? 'हिं' : 'EN'}
+              </button>
+              <button 
+                className="theme-toggle"
+                onClick={toggleTheme}
+                title="Toggle Theme"
+              >
+                {isDarkTheme ? '☀️' : '🌙'}
+              </button>
+            </div>
+          </div>
+        </header>
+
+        {/* Main Content */}
+        <main className="main-content">
+          <div className="categories-grid-full">
+            <CategoryCard
+              icon="☮️"
+              title="Peace & Comfort"
+              description="Find peace in difficult times through biblical wisdom"
+              onClick={() => handleCategoryClick('Peace & Comfort')}
+            />
+            <CategoryCard
+              icon="💝"
+              title="Forgiveness"
+              description="Learn about God's forgiveness and how to forgive others"
+              onClick={() => handleCategoryClick('Forgiveness')}
+            />
+            <CategoryCard
+              icon="🛡️"
+              title="Faith & Trust"
+              description="Strengthen your faith and trust in God's plan"
+              onClick={() => handleCategoryClick('Faith & Trust')}
+            />
+            <CategoryCard
+              icon="🙏"
+              title="Prayer"
+              description="Improve your prayer life with biblical guidance"
+              onClick={() => handleCategoryClick('Prayer')}
+            />
+            <CategoryCard
+              icon="🎯"
+              title="Purpose"
+              description="Discover God's purpose and calling for your life"
+              onClick={() => handleCategoryClick('Purpose')}
+            />
+            <CategoryCard
+              icon="💕"
+              title="Relationships"
+              description="Biblical wisdom for relationships and love"
+              onClick={() => handleCategoryClick('Relationships')}
+            />
+            <CategoryCard
+              icon="🌅"
+              title="Anxiety"
+              description="Overcome anxiety and worry through faith"
+              onClick={() => handleCategoryClick('Anxiety')}
+            />
+            <CategoryCard
+              icon="🦉"
+              title="Wisdom"
+              description="Gain biblical wisdom for life's decisions"
+              onClick={() => handleCategoryClick('Wisdom')}
+            />
+          </div>
+
+          {/* Bottom Navigation */}
+          <nav className="bottom-nav">
+            <button className="nav-item">
+              <span className="nav-icon">⚪</span>
+            </button>
+            <button className="nav-item">
+              <span className="nav-icon">🎤</span>
+            </button>
+            <button className="nav-item active">
+              <span className="nav-icon">👁️</span>
+            </button>
+            <button className="nav-item">
+              <span className="nav-icon">🎯</span>
+            </button>
+          </nav>
+        </main>
+      </div>
+    );
+  }
+
+  // Chat View
   return (
     <div className={`app ${isDarkTheme ? 'dark-theme' : 'light-theme'}`}>
       {/* Header */}
       <header className="app-header">
         <div className="header-content">
-          <div className="logo-section">
-            <div className="logo">🙏</div>
+          <button className="back-btn" onClick={backToHome}>←</button>
+          <div className="chat-header-info">
             <h1>Preacher.ai</h1>
-            <span className="subtitle">AI-Powered Biblical Guidance</span>
+            <span className="subtitle">Biblical Guidance</span>
           </div>
           <div className="header-controls">
-            <button 
-              className="language-toggle"
-              onClick={toggleLanguage}
-              title="Switch Language"
-            >
-              {language === 'english' ? 'हिं' : 'EN'}
-            </button>
-            <button 
-              className="theme-toggle"
-              onClick={toggleTheme}
-              title="Toggle Theme"
-            >
-              {isDarkTheme ? '☀️' : '🌙'}
-            </button>
             {citedVerses.length > 0 && (
               <button 
                 className={`verses-toggle ${showVerses ? 'active' : ''}`}
@@ -212,27 +419,30 @@ function App() {
                 📖 {citedVerses.length}
               </button>
             )}
+            <button 
+                className="theme-toggle"
+                onClick={toggleTheme}
+                title="Toggle Theme"
+              >
+                {isDarkTheme ? '☀️' : '🌙'}
+              </button>
           </div>
         </div>
       </header>
 
       {/* Main Content */}
-      <main className="main-content">
+      <main className="chat-main-content">
         {/* Chat Panel */}
         <div className="chat-panel">
           <div className="messages-container">
-            {messages.length === 0 ? (
-              <QuickStarters onQuestionSelect={sendMessage} />
-            ) : (
-              messages.map((msg) => (
-                <ChatMessage
-                  key={msg.id}
-                  message={msg.message}
-                  isUser={msg.sender === 'user'}
-                  citedVerses={msg.citedVerses}
-                />
-              ))
-            )}
+            {messages.map((msg) => (
+              <ChatMessage
+                key={msg.id}
+                message={msg.message}
+                isUser={msg.sender === 'user'}
+                citedVerses={msg.citedVerses}
+              />
+            ))}
             {isLoading && <LoadingSkeleton />}
             <div ref={messagesEndRef} />
           </div>
