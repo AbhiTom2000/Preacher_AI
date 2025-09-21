@@ -115,7 +115,6 @@ def validate_session_id(session_id: str) -> bool:
     except ValueError:
         return False
 
-# Enhanced Models with validation
 class ChatMessage(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     session_id: str
@@ -129,15 +128,54 @@ class ChatMessage(BaseModel):
     def validate_message(cls, v):
         if not v or not v.strip():
             raise ValueError('Message cannot be empty')
-        if len(v) > 1000:
-            raise ValueError('Message too long (max 1000 characters)')
-        return sanitize_input(v)
+        # Different limits for user vs AI messages
+        # This will be handled in the API endpoint
+        return v
     
     @validator('session_id')
     def validate_session_id(cls, v):
         if not validate_session_id(v):
             raise ValueError('Invalid session ID format')
         return v
+
+# Helper function to validate and truncate messages appropriately
+def validate_and_prepare_message(message: str, sender: str = "user") -> str:
+    """Validate and prepare message for storage with appropriate limits"""
+    if not message or not message.strip():
+        return ""
+    
+    if sender == "user":
+        # User messages limited to 1000 characters
+        max_length = 1000
+    else:
+        # AI messages can be longer for biblical guidance
+        max_length = 2500
+    
+    # Remove excessive whitespace
+    message = re.sub(r'\s+', ' ', message.strip())
+    
+    # Truncate if too long
+    if len(message) > max_length:
+        if sender == "ai":
+            # For AI messages, truncate at sentence boundary if possible
+            sentences = message.split('. ')
+            truncated = ""
+            for sentence in sentences:
+                if len(truncated + sentence + '. ') <= max_length:
+                    truncated += sentence + '. '
+                else:
+                    break
+            if truncated:
+                message = truncated.rstrip()
+            else:
+                message = message[:max_length] + "..."
+        else:
+            message = message[:max_length] + "..."
+    
+    # Remove potentially harmful characters (basic XSS prevention)
+    message = re.sub(r'[<>{}]', '', message)
+    
+    return message
 
 class ChatSession(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
