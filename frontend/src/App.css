@@ -860,7 +860,28 @@ body {
   font-weight: 400;
 }
 
-/* Copy to Clipboard */
+/* Copy to Clipboard Enhancement */
+.copy-hint {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  background: var(--accent-primary);
+  color: white;
+  padding: 0.5rem 0.75rem;
+  border-radius: 8px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  opacity: 0;
+  transform: translateY(-4px);
+  transition: all 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  pointer-events: none;
+}
+
+.verse-card:hover .copy-hint {
+  opacity: 1;
+  transform: translateY(0);
+}
+
 .verse-card::after {
   content: '📋';
   position: absolute;
@@ -869,10 +890,11 @@ body {
   opacity: 0;
   transition: opacity 0.3s ease;
   font-size: 1.125rem;
+  pointer-events: none;
 }
 
 .verse-card:hover::after {
-  opacity: 0.6;
+  opacity: 0;
 }
 
 .verse-card {
