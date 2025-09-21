@@ -197,34 +197,56 @@ async def get_bible_verses(query: str, language: str = "english"):
         logging.error(f"Error fetching Bible verses: {e}")
         return []
 
-# AI Integration with Gemini
+# Enhanced AI Integration with better error handling
 async def get_biblical_guidance(user_message: str, session_id: str, language: str = "english"):
-    """Get biblical guidance using Gemini AI"""
+    """Get biblical guidance using Gemini AI with enhanced error handling"""
     try:
+        # Input validation
+        if not user_message or len(user_message.strip()) < 3:
+            return BiblicalResponse(
+                response="Please ask a more specific question for biblical guidance.",
+                cited_verses=[],
+                language=language
+            )
+        
         gemini_key = os.environ.get('GEMINI_API_KEY')
         if not gemini_key:
-            raise Exception("Gemini API key not found")
+            logging.error("Gemini API key not configured")
+            return BiblicalResponse(
+                response="I apologize, but I'm having trouble accessing the AI service right now. Please try again later.",
+                cited_verses=[],
+                language=language
+            )
 
-        # System prompt for biblical guidance
-        system_message = f"""You are Preacher.ai, a wise and compassionate AI assistant that provides biblical guidance.
+        # Enhanced system prompt for better biblical guidance
+        system_message = f"""You are Preacher.ai, a compassionate and wise AI assistant that provides biblical guidance.
 
 Your role:
 - Provide thoughtful, biblical guidance based on Scripture
 - Always cite relevant Bible verses in your responses
 - Be encouraging, loving, and spiritually uplifting
 - Respond in {language}
-- Format your response to clearly indicate which Bible verses you're referencing
+- Keep responses between 150-300 words for optimal readability
 
 Guidelines:
-- Keep responses between 150-300 words
-- Include 1-3 relevant Bible verses
-- Be sensitive to spiritual struggles
-- Offer practical application of biblical principles
+- Focus on practical application of biblical principles
 - Use warm, pastoral tone
+- Address spiritual concerns with empathy
+- Include 1-3 relevant Bible verses with clear references
+- Avoid denominational controversies
+- Emphasize God's love, grace, and wisdom
 
-When citing verses, use this format: [Bible Reference: Book Chapter:Verse]"""
+When citing verses, reference them clearly in your response with format: [Book Chapter:Verse]
 
-        # Initialize Gemini chat
+Example topics you help with:
+- Finding peace in difficult times
+- Understanding forgiveness
+- Dealing with anxiety and worry
+- Spiritual growth and faith
+- Relationships and love
+- Purpose and meaning in life"""
+
+        # Initialize Gemini chat with timeout
         chat = LlmChat(
             api_key=gemini_key,
             session_id=session_id,
@@ -234,8 +256,28 @@ When citing verses, use this format: [Bible Reference: Book Chapter:Verse]"""
         # Create user message
         user_msg = UserMessage(text=user_message)
         
-        # Get AI response
-        ai_response = await chat.send_message(user_msg)
+        # Get AI response with timeout
+        try:
+            ai_response = await asyncio.wait_for(
+                chat.send_message(user_msg), 
+                timeout=30.0
+            )
+        except asyncio.TimeoutError:
+            logging.error("AI response timeout")
+            return BiblicalResponse(
+                response="I apologize for the delay. Please try asking your question again.",
+                cited_verses=[],
+                language=language
+            )
+        
+        # Validate response
+        if not ai_response or len(ai_response.strip()) < 10:
+            logging.warning("AI response too short")
+            return BiblicalResponse(
+                response="Let me think more about your question. Could you please rephrase it or provide more context?",
+                cited_verses=[],
+                language=language
+            )
         
         # Get related Bible verses
         verses = await get_bible_verses(user_message, language)
@@ -248,9 +290,15 @@ When citing verses, use this format: [Bible Reference: Book Chapter:Verse]"""
         
     except Exception as e:
         logging.error(f"Error getting biblical guidance: {e}")
-        fallback_response = "I apologize, but I'm having trouble accessing the AI service right now. Please try again in a moment. Remember, 'The Lord is near to all who call on him, to all who call on him in truth.' - Psalm 145:18"
+        
+        # Provide graceful fallback responses
+        fallback_responses = {
+            "english": "I apologize, but I'm experiencing technical difficulties right now. Please try again in a moment. Remember, 'The Lord is near to all who call on him, to all who call on him in truth.' - Psalm 145:18",
+            "hindi": "मुझे खुशी है, लेकिन मैं अभी तकनीकी कठिनाइयों का सामना कर रहा हूं। कृपया एक पल में फिर से कोशिश करें।"
+        }
+        
         return BiblicalResponse(
-            response=fallback_response,
+            response=fallback_responses.get(language, fallback_responses["english"]),
             cited_verses=[],
             language=language
         )
