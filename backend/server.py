@@ -363,8 +363,8 @@ async def chat_endpoint(message: dict):
         if not session_id or not validate_session_id(session_id):
             raise HTTPException(status_code=400, detail="Invalid session ID")
         
-        # Sanitize input
-        user_message = sanitize_input(user_message)
+        # Sanitize and validate user input
+        user_message = validate_and_prepare_message(user_message, "user")
         language = detect_language(user_message)
         
         # Validate session exists
