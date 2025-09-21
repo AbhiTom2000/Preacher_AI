@@ -267,11 +267,82 @@ async def create_session():
 async def root():
     return {"message": "Preacher.ai Backend Running", "status": "healthy"}
 
-# WebSocket endpoint
+# Server-Sent Events endpoint for real-time updates
+@api_router.get("/stream/{session_id}")
+async def stream_chat_updates(session_id: str):
+    """Server-Sent Events endpoint for real-time chat updates"""
+    from fastapi.responses import StreamingResponse
+    
+    async def event_generator():
+        try:
+            # Send initial connection message
+            yield f"data: {json.dumps({'type': 'connected', 'session_id': session_id})}\n\n"
+            
+            # Keep connection alive with periodic heartbeat
+            last_message_count = 0
+            while True:
+                try:
+                    # Check for new messages in this session
+                    messages = await db.chat_messages.find(
+                        {"session_id": session_id}
+                    ).sort("timestamp", 1).to_list(1000)
+                    
+                    current_count = len(messages)
+                    if current_count > last_message_count:
+                        # New messages found, send the latest one
+                        latest_message = messages[-1] if messages else None
+                        if latest_message:
+                            # Clean up MongoDB ObjectId
+                            if '_id' in latest_message:
+                                del latest_message['_id']
+                            latest_message = parse_from_mongo(latest_message)
+                            
+                            yield f"data: {json.dumps({'type': 'new_message', 'message': latest_message})}\n\n"
+                        
+                        last_message_count = current_count
+                    
+                    # Send heartbeat every 30 seconds
+                    yield f"data: {json.dumps({'type': 'heartbeat', 'timestamp': datetime.now(timezone.utc).isoformat()})}\n\n"
+                    
+                    # Wait before next check
+                    await asyncio.sleep(5)
+                    
+                except Exception as e:
+                    logging.error(f"SSE stream error: {e}")
+                    yield f"data: {json.dumps({'type': 'error', 'message': 'Stream error occurred'})}\n\n"
+                    break
+                    
+        except Exception as e:
+            logging.error(f"SSE generator error: {e}")
+            yield f"data: {json.dumps({'type': 'error', 'message': 'Connection error'})}\n\n"
+    
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET",
+            "Access-Control-Allow-Headers": "Cache-Control"
+        }
+    )
+
+# WebSocket endpoint (keeping for compatibility but will fallback to SSE)
 @app.websocket("/ws/{session_id}")
 async def websocket_endpoint(websocket: WebSocket, session_id: str):
-    await manager.connect(websocket)
+    """WebSocket endpoint - fallback implementation"""
     try:
+        await manager.connect(websocket)
+        
+        # Send connection confirmation
+        await websocket.send_text(json.dumps({
+            "type": "connected",
+            "message": "WebSocket connected successfully",
+            "session_id": session_id,
+            "note": "Using WebSocket fallback mode"
+        }))
+        
         while True:
             data = await websocket.receive_text()
             message_data = json.loads(data)
