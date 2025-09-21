@@ -23,10 +23,21 @@ const ChatMessage = ({ message, isUser, citedVerses = [] }) => {
 };
 
 const VerseCard = ({ verse }) => {
+  const copyToClipboard = () => {
+    const text = `${verse.reference}\n"${verse.text}"`;
+    navigator.clipboard.writeText(text).then(() => {
+      // Could add a toast notification here
+      console.log('Verse copied to clipboard');
+    }).catch(err => {
+      console.error('Failed to copy verse: ', err);
+    });
+  };
+
   return (
-    <div className="verse-card">
+    <div className="verse-card" onClick={copyToClipboard}>
       <div className="verse-reference">{verse.reference}</div>
       <div className="verse-text">"{verse.text}"</div>
+      <div className="copy-hint">Click to copy</div>
     </div>
   );
 };
