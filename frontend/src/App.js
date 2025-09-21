@@ -86,12 +86,12 @@ function App() {
   const inputRef = useRef(null);
 
   useEffect(() => {
-    createSession();
-  }, []);
+  createSession();
+}, []);
 
-  useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
+useEffect(() => {
+  sseConnect();
+}, [sessionId]); // Re-connect when a new session ID is available
 
   const createSession = async () => {
     try {
@@ -102,64 +102,75 @@ function App() {
     }
   };
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
+  const sseConnect = () => {
+  if (!sessionId) return;
 
-  const sendMessage = async (message = inputMessage) => {
-    if (!message.trim() || !sessionId) return;
+  const eventSource = new EventSource(`${API}/stream/${sessionId}`);
 
-    const userMessage = {
-      id: Date.now(),
-      message: message,
-      sender: 'user',
-      timestamp: new Date()
-    };
+  eventSource.onmessage = (event) => {
+    const data = JSON.parse(event.data);
 
-    setMessages(prev => [...prev, userMessage]);
-    setInputMessage('');
-    setIsLoading(true);
-
-    try {
-      const response = await axios.post(`${API}/chat`, {
-        message: message,
-        session_id: sessionId
-      });
-
+    if (data.type === 'new_message' && data.message.sender === 'ai') {
       const aiMessage = {
-        id: Date.now() + 1,
-        message: response.data.response,
+        id: data.message.id,
+        message: data.message.response,
         sender: 'ai',
-        timestamp: new Date(),
-        citedVerses: response.data.cited_verses || []
+        timestamp: new Date(data.message.timestamp),
+        citedVerses: data.message.cited_verses || []
       };
-
       setMessages(prev => [...prev, aiMessage]);
-      
-      if (response.data.cited_verses && response.data.cited_verses.length > 0) {
-        setCitedVerses(response.data.cited_verses);
+      if (data.message.cited_verses && data.message.cited_verses.length > 0) {
+        setCitedVerses(data.message.cited_verses);
         setShowVerses(true);
       }
-
-    } catch (error) {
-      console.error('Error sending message:', error);
-      const errorMessage = {
-        id: Date.now() + 1,
-        message: 'I apologize, but I\'m having trouble connecting right now. Please try again in a moment.',
-        sender: 'ai',
-        timestamp: new Date(),
-        citedVerses: []
-      };
-      setMessages(prev => [...prev, errorMessage]);
-    } finally {
       setIsLoading(false);
     }
   };
 
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    sendMessage();
+  eventSource.onerror = (error) => {
+    console.error("SSE connection error:", error);
+    eventSource.close();
   };
+};
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  
+
+const handleSubmit = async (e) => {
+  e.preventDefault();
+  if (!inputMessage.trim() || !sessionId || isLoading) return;
+
+  const userMessage = {
+    id: Date.now(),
+    message: inputMessage,
+    sender: 'user',
+    timestamp: new Date()
+  };
+  setMessages(prev => [...prev, userMessage]);
+  setInputMessage('');
+  setIsLoading(true);
+
+  try {
+    await axios.post(`${API}/chat`, {
+      message: userMessage.message,
+      session_id: sessionId
+    });
+  } catch (error) {
+    console.error('Error sending message:', error);
+    const errorMessage = {
+      id: Date.now() + 1,
+      message: 'I apologize, but I\'m having trouble connecting right now. Please try again in a moment.',
+      sender: 'ai',
+      timestamp: new Date(),
+      citedVerses: []
+    };
+    setMessages(prev => [...prev, errorMessage]);
+    setIsLoading(false);
+  }
+};
 
   const handleKeyPress = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
