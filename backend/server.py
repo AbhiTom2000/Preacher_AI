@@ -32,9 +32,9 @@ db = client[os.environ['DB_NAME']]
 # Load Bible verse data
 print("Loading Bible verses...")
 try:
-    with open('storage\english_bible_verses.json', 'r') as f:
+    with open('storage/english_bible_verses.json', 'r') as f:
         english_verses_data = json.load(f)
-    with open('storage\hindi_bible_verses.json', 'r') as f:
+    with open('storage/hindi_bible_verses.json', 'r') as f:
         hindi_verses_data = json.load(f)
     print("Bible verse data loaded successfully.")
 except FileNotFoundError:
@@ -312,7 +312,7 @@ async def get_biblical_guidance(user_message: str, session_id: str, language: st
                 language=language
             )
         
-        gemini_key = os.environ.get('AIzaSyCmcN182FLYXYXdRmwbwTOAquJcBrhifCU')
+        gemini_key = os.environ.get('GEMINI_API_KEY')
         if not gemini_key:
             logging.error("Gemini API key not configured")
             return BiblicalResponse(
@@ -674,9 +674,9 @@ app.include_router(api_router)
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
+    allow_origins=["http://localhost:3000"],
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["*"],    
 )
 
 # Add security headers
