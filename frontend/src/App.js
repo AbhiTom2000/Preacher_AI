@@ -488,6 +488,11 @@ function App() {
             {citedVerses.map((verse, index) => (
               <VerseCard key={index} verse={verse} />
             ))}
+            {citedVerses.length === 0 && (
+              <div style={{textAlign: 'center', color: 'var(--text-muted)', padding: '2rem'}}>
+                No verses cited yet. Ask a spiritual question to see Bible verse citations.
+              </div>
+            )}
           </div>
         </div>
       </main>
