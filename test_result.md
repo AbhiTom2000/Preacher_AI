@@ -195,6 +195,30 @@ backend:
         agent: "testing"
         comment: "✅ TESTED: Multi-language support working correctly. Language detection properly identifies Hindi text (मुझे शांति चाहिए) and English text. API responds with appropriate language field in JSON response. Both English and Hindi inputs are processed successfully."
 
+  - task: "AI Response Length Validation Fix"
+    implemented: true
+    working: false
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: false
+        agent: "testing"
+        comment: "❌ CRITICAL ISSUE: AI responses sometimes exceed 1000 character limit causing MongoDB save failures. Backend logs show 'Message too long (max 1000 characters)' validation errors when saving AI responses. This prevents chat history storage for longer AI responses. The ChatMessage model validates message length but AI responses can be longer than user input limits. Need to either increase AI response limit or truncate responses before saving."
+
+  - task: "Production Security Headers"
+    implemented: false
+    working: false
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: true
+    status_history:
+      - working: false
+        agent: "testing"
+        comment: "❌ MISSING: Security headers not implemented. Missing X-Content-Type-Options, X-Frame-Options, X-XSS-Protection headers. CORS currently allows all origins (*) which should be restricted in production. These are important for production security hardening."
+
 frontend:
   - task: "Beautiful Two-Pane Chat Interface"
     implemented: true
