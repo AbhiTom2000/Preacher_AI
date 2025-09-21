@@ -240,6 +240,9 @@ frontend:
       - working: true
         agent: "testing"
         comment: "✅ TESTED: Bible verses panel working perfectly. Slides in from right when AI cites verses, displays verse cards with proper references (e.g., 'Philippians 4:6-7', 'Matthew 11:28'), verses toggle button appears in header showing count, close button works correctly. Panel is responsive and adapts to mobile view."
+      - working: true
+        agent: "testing"
+        comment: "Minor: Verses panel slide-in animation not working when clicking verses toggle button during redesign testing, though verses toggle button shows correct verse count (📖 2). Core functionality intact but slide animation needs attention."
 
   - task: "Quick Starter Questions"
     implemented: true
