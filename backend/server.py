@@ -55,7 +55,67 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-# Models
+# Rate limiting setup
+rate_limit_storage = defaultdict(list)
+RATE_LIMIT_REQUESTS = 10  # requests per minute
+RATE_LIMIT_WINDOW = 60  # seconds
+
+def rate_limit(max_requests: int = RATE_LIMIT_REQUESTS, window: int = RATE_LIMIT_WINDOW):
+    """Rate limiting decorator"""
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            # Get client IP (simplified for demo)
+            client_id = "default_client"  # In production, extract from request
+            current_time = time.time()
+            
+            # Clean old requests
+            rate_limit_storage[client_id] = [
+                req_time for req_time in rate_limit_storage[client_id] 
+                if current_time - req_time < window
+            ]
+            
+            # Check rate limit
+            if len(rate_limit_storage[client_id]) >= max_requests:
+                raise HTTPException(
+                    status_code=429, 
+                    detail="Too many requests. Please wait before sending another message."
+                )
+            
+            # Add current request
+            rate_limit_storage[client_id].append(current_time)
+            
+            return await func(*args, **kwargs)
+        return wrapper
+    return decorator
+
+# Input validation and sanitization
+def sanitize_input(text: str) -> str:
+    """Sanitize user input"""
+    if not text:
+        return ""
+    
+    # Remove excessive whitespace
+    text = re.sub(r'\s+', ' ', text.strip())
+    
+    # Limit length
+    if len(text) > 1000:
+        text = text[:1000] + "..."
+    
+    # Remove potentially harmful characters (basic XSS prevention)
+    text = re.sub(r'[<>{}]', '', text)
+    
+    return text
+
+def validate_session_id(session_id: str) -> bool:
+    """Validate session ID format"""
+    try:
+        uuid.UUID(session_id)
+        return True
+    except ValueError:
+        return False
+
+# Enhanced Models with validation
 class ChatMessage(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     session_id: str
@@ -64,6 +124,20 @@ class ChatMessage(BaseModel):
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     language: str = "english"
     cited_verses: Optional[List[dict]] = []
+    
+    @validator('message')
+    def validate_message(cls, v):
+        if not v or not v.strip():
+            raise ValueError('Message cannot be empty')
+        if len(v) > 1000:
+            raise ValueError('Message too long (max 1000 characters)')
+        return sanitize_input(v)
+    
+    @validator('session_id')
+    def validate_session_id(cls, v):
+        if not validate_session_id(v):
+            raise ValueError('Invalid session ID format')
+        return v
 
 class ChatSession(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
