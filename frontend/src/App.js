@@ -84,93 +84,115 @@ function App() {
   
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
+  const eventSourceRef = useRef(null);
+
+  // UseEffect for session creation and SSE connection
+  useEffect(() => {
+    const createAndConnect = async () => {
+      try {
+        // Create session
+        const response = await axios.post(`${API}/session`);
+        const newSessionId = response.data.session_id;
+        setSessionId(newSessionId);
+
+        // Disconnect from any existing SSE to avoid duplicates
+        if (eventSourceRef.current) {
+          eventSourceRef.current.close();
+        }
+
+        // Connect to SSE stream
+        const eventSource = new EventSource(`${API}/stream/${newSessionId}`);
+        eventSourceRef.current = eventSource;
+
+        eventSource.onmessage = (event) => {
+          const data = JSON.parse(event.data);
+
+          if (data.type === 'new_message' && data.message.sender === 'ai') {
+            setMessages(prev => [...prev, {
+              id: data.message.id,
+              message: data.message.response,
+              sender: 'ai',
+              timestamp: new Date(data.message.timestamp),
+              citedVerses: data.message.cited_verses || []
+            }]);
+            
+            if (data.message.cited_verses && data.message.cited_verses.length > 0) {
+              setCitedVerses(data.message.cited_verses);
+              setShowVerses(true);
+            }
+            setIsLoading(false);
+          } else if (data.type === 'error') {
+            console.error("SSE stream error:", data.message);
+            setIsLoading(false);
+          }
+        };
+
+        eventSource.onerror = (error) => {
+          console.error("SSE connection error:", error);
+          setIsLoading(false);
+        };
+      } catch (error) {
+        console.error('Error creating session or connecting to SSE:', error);
+      }
+    };
+
+    createAndConnect();
+
+    // Cleanup function to close the SSE connection on component unmount
+    return () => {
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+      }
+    };
+  }, []); // Empty dependency array ensures this runs once
 
   useEffect(() => {
-  createSession();
-}, []);
-
-useEffect(() => {
-  sseConnect();
-}, [sessionId]); // Re-connect when a new session ID is available
-
-  const createSession = async () => {
-    try {
-      const response = await axios.post(`${API}/session`);
-      setSessionId(response.data.session_id);
-    } catch (error) {
-      console.error('Error creating session:', error);
-    }
-  };
-
-  const sseConnect = () => {
-  if (!sessionId) return;
-
-  const eventSource = new EventSource(`${API}/stream/${sessionId}`);
-
-  eventSource.onmessage = (event) => {
-    const data = JSON.parse(event.data);
-
-    if (data.type === 'new_message' && data.message.sender === 'ai') {
-      const aiMessage = {
-        id: data.message.id,
-        message: data.message.response,
-        sender: 'ai',
-        timestamp: new Date(data.message.timestamp),
-        citedVerses: data.message.cited_verses || []
-      };
-      setMessages(prev => [...prev, aiMessage]);
-      if (data.message.cited_verses && data.message.cited_verses.length > 0) {
-        setCitedVerses(data.message.cited_verses);
-        setShowVerses(true);
-      }
-      setIsLoading(false);
-    }
-  };
-
-  eventSource.onerror = (error) => {
-    console.error("SSE connection error:", error);
-    eventSource.close();
-  };
-};
+    scrollToBottom();
+  }, [messages]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
-  
+  const sendMessage = async (message = inputMessage) => {
+    if (!message.trim() || !sessionId || isLoading) return;
 
-const handleSubmit = async (e) => {
-  e.preventDefault();
-  if (!inputMessage.trim() || !sessionId || isLoading) return;
-
-  const userMessage = {
-    id: Date.now(),
-    message: inputMessage,
-    sender: 'user',
-    timestamp: new Date()
-  };
-  setMessages(prev => [...prev, userMessage]);
-  setInputMessage('');
-  setIsLoading(true);
-
-  try {
-    await axios.post(`${API}/chat`, {
-      message: userMessage.message,
-      session_id: sessionId
-    });
-  } catch (error) {
-    console.error('Error sending message:', error);
-    const errorMessage = {
-      id: Date.now() + 1,
-      message: 'I apologize, but I\'m having trouble connecting right now. Please try again in a moment.',
-      sender: 'ai',
-      timestamp: new Date(),
-      citedVerses: []
+    const userMessage = {
+      id: Date.now(),
+      message: message,
+      sender: 'user',
+      timestamp: new Date()
     };
-    setMessages(prev => [...prev, errorMessage]);
-    setIsLoading(false);
-  }
-};
+
+    setMessages(prev => [...prev, userMessage]);
+    setInputMessage('');
+    setIsLoading(true);
+
+    try {
+      // Send message to the backend
+      await axios.post(`${API}/chat`, {
+        message: message,
+        session_id: sessionId
+      });
+      // The AI response will be handled by the SSE listener
+    } catch (error) {
+      console.error('Error sending message:', error);
+      const errorMessage = {
+        id: Date.now() + 1,
+        message: 'I apologize, but I\'m having trouble connecting right now. Please try again in a moment.',
+        sender: 'ai',
+        timestamp: new Date(),
+        citedVerses: []
+      };
+      setMessages(prev => [...prev, errorMessage]);
+      setIsLoading(false);
+    }
+  };
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    sendMessage();
+  };
 
   const handleKeyPress = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
