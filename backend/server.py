@@ -1,7 +1,8 @@
-from fastapi import FastAPI, APIRouter, HTTPException, WebSocket
+from fastapi import FastAPI, APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo.errors import PyMongoError
 import os
 import logging
 from pathlib import Path
@@ -11,8 +12,6 @@ import uuid
 from datetime import datetime, timezone
 import asyncio
 import json
-import aiohttp
-from emergentintegrations.llm.chat import LlmChat, UserMessage
 import re
 from functools import wraps
 import time
@@ -20,6 +19,11 @@ from collections import defaultdict
 import numpy as np
 from sentence_transformers import SentenceTransformer
 import faiss
+# from fastapi_limiter import FastAPILimiter
+# import aioredis
+import bleach
+import google.generativeai as genai
+
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -32,18 +36,26 @@ db = client[os.environ['DB_NAME']]
 # Load Bible verse data
 print("Loading Bible verses...")
 try:
-    with open('storage/english_bible_verses.json', 'r') as f:
+    with open('storage/english_bible_verses.json', 'r', encoding='utf-8') as f:
         english_verses_data = json.load(f)
-    with open('storage/hindi_bible_verses.json', 'r') as f:
+    with open('storage/hindi_bible_verses.json', 'r', encoding='utf-8') as f:
         hindi_verses_data = json.load(f)
     print("Bible verse data loaded successfully.")
 except FileNotFoundError:
     logging.error("Bible verse JSON files not found. Please ensure they are in the backend directory.")
     english_verses_data = []
     hindi_verses_data = []
+except UnicodeDecodeError as e:
+    logging.error(f"Encoding error reading Bible verse files: {e}")
+    print(f"Try saving the files with UTF-8 encoding. Error: {e}")
+    english_verses_data = []
+    hindi_verses_data = []
+except json.JSONDecodeError as e:
+    logging.error(f"JSON parsing error: {e}")
+    english_verses_data = []
+    hindi_verses_data = []
 
 # Initialize Sentence Transformer model
-# This model needs to be downloaded, a process that can take a while
 print("Loading Sentence Transformer model...")
 try:
     model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
@@ -70,65 +82,56 @@ def create_faiss_index(verses_data):
     print("FAISS index created successfully.")
     return index, verse_map
 
-# Create English and Hindi indexes
 english_index, english_verse_map = create_faiss_index(english_verses_data)
 hindi_index, hindi_verse_map = create_faiss_index(hindi_verses_data)
 
-# Create the main app
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
 
-# Rate limiting setup
-rate_limit_storage = defaultdict(list)
-RATE_LIMIT_REQUESTS = 10  # requests per minute
-RATE_LIMIT_WINDOW = 60  # seconds
+# @app.on_event("startup")
+# async def startup_event():
+#     redis_url = os.environ.get('REDIS_URL')
+#     if redis_url:
+#         redis_client = aioredis.from_url(redis_url, encoding="utf8", decode_responses=True)
+#         await FastAPILimiter.init(redis_client)
+#     else:
+#         print("REDIS_URL not found. Rate limiting will not be enabled.")
 
-def rate_limit(max_requests: int = RATE_LIMIT_REQUESTS, window: int = RATE_LIMIT_WINDOW):
-    """Rate limiting decorator"""
-    def decorator(func):
-        @wraps(func)
-        async def wrapper(*args, **kwargs):
-            # Get client IP (simplified for demo)
-            client_id = "default_client"  # In production, extract from request
-            current_time = time.time()
-            
-            # Clean old requests
-            rate_limit_storage[client_id] = [
-                req_time for req_time in rate_limit_storage[client_id] 
-                if current_time - req_time < window
-            ]
-            
-            # Check rate limit
-            if len(rate_limit_storage[client_id]) >= max_requests:
-                raise HTTPException(
-                    status_code=429, 
-                    detail="Too many requests. Please wait before sending another message."
-                )
-            
-            # Add current request
-            rate_limit_storage[client_id].append(current_time)
-            
-            return await func(*args, **kwargs)
-        return wrapper
-    return decorator
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: dict[str, WebSocket] = {}
 
-# Input validation and sanitization
+    async def connect(self, websocket: WebSocket, session_id: str):
+        await websocket.accept()
+        self.active_connections[session_id] = websocket
+
+    def disconnect(self, session_id: str):
+        self.active_connections.pop(session_id, None)
+
+    async def send_personal_message(self, message: str, session_id: str):
+        if session_id in self.active_connections:
+            await self.active_connections[session_id].send_text(message)
+            
+manager = ConnectionManager()
+
 def sanitize_input(text: str) -> str:
-    """Sanitize user input"""
+    """Sanitize user input using bleach for robust XSS prevention"""
     if not text:
         return ""
     
-    # Remove excessive whitespace
-    text = re.sub(r'\s+', ' ', text.strip())
+    sanitized_text = bleach.clean(
+        text, 
+        tags=[], 
+        attributes=[], 
+        strip=True
+    )
+
+    sanitized_text = re.sub(r'\s+', ' ', sanitized_text.strip())
     
-    # Limit length
-    if len(text) > 1000:
-        text = text[:1000] + "..."
+    if len(sanitized_text) > 1000:
+        sanitized_text = sanitized_text[:1000] + "..."
     
-    # Remove potentially harmful characters (basic XSS prevention)
-    text = re.sub(r'[<>{}]', '', text)
-    
-    return text
+    return sanitized_text
 
 def validate_session_id(session_id: str) -> bool:
     """Validate session ID format"""
@@ -142,7 +145,7 @@ class ChatMessage(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     session_id: str
     message: str
-    sender: str  # 'user' or 'ai'
+    sender: str
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     language: str = "english"
     cited_verses: Optional[List[dict]] = []
@@ -151,8 +154,6 @@ class ChatMessage(BaseModel):
     def validate_message(cls, v):
         if not v or not v.strip():
             raise ValueError('Message cannot be empty')
-        # Different limits for user vs AI messages
-        # This will be handled in the API endpoint
         return v
     
     @validator('session_id')
@@ -161,26 +162,20 @@ class ChatMessage(BaseModel):
             raise ValueError('Invalid session ID format')
         return v
 
-# Helper function to validate and truncate messages appropriately
 def validate_and_prepare_message(message: str, sender: str = "user") -> str:
     """Validate and prepare message for storage with appropriate limits"""
     if not message or not message.strip():
         return ""
     
     if sender == "user":
-        # User messages limited to 1000 characters
         max_length = 1000
     else:
-        # AI messages can be longer for biblical guidance
         max_length = 2500
     
-    # Remove excessive whitespace
-    message = re.sub(r'\s+', ' ', message.strip())
+    message = sanitize_input(message)
     
-    # Truncate if too long
     if len(message) > max_length:
         if sender == "ai":
-            # For AI messages, truncate at sentence boundary if possible
             sentences = message.split('. ')
             truncated = ""
             for sentence in sentences:
@@ -195,9 +190,6 @@ def validate_and_prepare_message(message: str, sender: str = "user") -> str:
         else:
             message = message[:max_length] + "..."
     
-    # Remove potentially harmful characters (basic XSS prevention)
-    message = re.sub(r'[<>{}]', '', message)
-    
     return message
 
 class ChatSession(BaseModel):
@@ -211,7 +203,6 @@ class BiblicalResponse(BaseModel):
     cited_verses: List[dict] = []
     language: str
 
-# Helper functions
 def prepare_for_mongo(data):
     if isinstance(data, dict):
         for key, value in data.items():
@@ -229,13 +220,8 @@ def parse_from_mongo(item):
                     pass
     return item
 
-# Bible files through JSON files
 async def get_bible_verses(query: str, language: str = "english"):
-    """
-    Get relevant Bible verses using semantic search on pre-built FAISS indices.
-    """
     try:
-        # Use appropriate index based on language
         if language == "hindi":
             index = hindi_index
             verse_map = hindi_verse_map
@@ -247,18 +233,12 @@ async def get_bible_verses(query: str, language: str = "english"):
             logging.warning("FAISS index or model not available. Returning empty list.")
             return []
 
-        # Create embedding for the user query
         query_embedding = model.encode([query], convert_to_numpy=True)
-
-        # Search the index for the top 5 most similar verses
-        # The 'I' contains the indices of the most similar vectors
         D, I = index.search(query_embedding, k=5)
 
-        # Extract the actual verse data based on the indices
         results = []
         for i, distance in zip(I[0], D[0]):
-            # Implement similarity thresholding
-            if distance < 10.0:  # A lower distance means higher similarity
+            if distance < 10.0:
                 verse = verse_map[i]
                 results.append({
                     "reference": f"{verse['book']} {verse['chapter']}:{verse['verse']}",
@@ -275,11 +255,8 @@ async def get_bible_verses(query: str, language: str = "english"):
         logging.error(f"Error fetching Bible verses with semantic search: {e}")
         return []
 
-# Enhanced AI Integration with better error handling
 async def get_biblical_guidance(user_message: str, session_id: str, language: str = "english"):
-    """Get biblical guidance using Gemini AI with enhanced error handling"""
     try:
-        # Input validation
         if not user_message or len(user_message.strip()) < 3:
             return BiblicalResponse(
                 response="Please ask a more specific question for biblical guidance.",
@@ -296,7 +273,6 @@ async def get_biblical_guidance(user_message: str, session_id: str, language: st
                 language=language
             )
 
-        # Enhanced system prompt for better biblical guidance
         system_message = f"""You are Preacher.ai, a gentle spiritual companion who responds with the heart of a caring pastor.
 
 **RESPONSE FORMAT** - Use "The Gentle Guide" structure:
@@ -333,22 +309,21 @@ async def get_biblical_guidance(user_message: str, session_id: str, language: st
 
 Remember: Every response should feel like a **personal letter from a loving pastor** who truly understands their heart."""
 
-        # Initialize Gemini chat with timeout
-        chat = LlmChat(
-            api_key=gemini_key,
-            session_id=session_id,
-            system_message=system_message
-        ).with_model("gemini", "gemini-1.5-flash")
-
-        # Create user message
-        user_msg = UserMessage(text=user_message)
+        genai.configure(api_key=gemini_key)
         
-        # Get AI response with timeout
+        model = genai.GenerativeModel(
+            model_name="gemini-1.5-flash", 
+            system_instruction=system_message
+        )
+        
+        chat_session = model.start_chat()
+        
         try:
-            ai_response = await asyncio.wait_for(
-                chat.send_message(user_msg), 
+            ai_response_obj = await asyncio.wait_for(
+                chat_session.send_message_async(user_message), 
                 timeout=30.0
             )
+            ai_response = ai_response_obj.text
         except asyncio.TimeoutError:
             logging.error("AI response timeout")
             return BiblicalResponse(
@@ -357,7 +332,6 @@ Remember: Every response should feel like a **personal letter from a loving past
                 language=language
             )
         
-        # Validate response
         if not ai_response or len(ai_response.strip()) < 10:
             logging.warning("AI response too short")
             return BiblicalResponse(
@@ -366,7 +340,6 @@ Remember: Every response should feel like a **personal letter from a loving past
                 language=language
             )
         
-        # Get related Bible verses
         verses = await get_bible_verses(user_message, language)
         
         return BiblicalResponse(
@@ -378,7 +351,6 @@ Remember: Every response should feel like a **personal letter from a loving past
     except Exception as e:
         logging.error(f"Error getting biblical guidance: {e}")
         
-        # Provide graceful fallback responses
         fallback_responses = {
             "english": "I apologize, but I'm experiencing technical difficulties right now. Please try again in a moment. Remember, 'The Lord is near to all who call on him, to all who call on him in truth.' - Psalm 145:18",
             "hindi": "मुझे खुशी है, लेकिन मैं अभी तकनीकी कठिनाइयों का सामना कर रहा हूं। कृपया एक पल में फिर से कोशिश करें।"
@@ -390,42 +362,37 @@ Remember: Every response should feel like a **personal letter from a loving past
             language=language
         )
 
-# Language detection
 def detect_language(text: str) -> str:
-    """Simple language detection"""
     hindi_chars = any('\u0900' <= char <= '\u097F' for char in text)
     return "hindi" if hindi_chars else "english"
 
-# Enhanced API Routes with better error handling and validation
-@api_router.post("/chat", response_model=dict)
-@rate_limit()
-async def chat_endpoint(message: dict):
-    """Handle chat messages with enhanced validation and error handling"""
+@app.websocket("/ws/chat/{session_id}")
+async def websocket_chat_endpoint(websocket: WebSocket, session_id: str):
+    await manager.connect(websocket, session_id)
     try:
-        # Validate input
-        user_message = message.get('message', '').strip()
-        session_id = message.get('session_id', '')
-        
-        if not user_message:
-            raise HTTPException(status_code=400, detail="Message cannot be empty")
-        
-        if not session_id or not validate_session_id(session_id):
-            raise HTTPException(status_code=400, detail="Invalid session ID")
-        
-        # Sanitize and validate user input
-        user_message = validate_and_prepare_message(user_message, "user")
-        language = detect_language(user_message)
-        
-        # Validate session exists
-        session_exists = await db.chat_sessions.find_one({"id": session_id})
-        if not session_exists:
-            # Create session if it doesn't exist
-            session = ChatSession(id=session_id, language=language)
-            session_dict = prepare_for_mongo(session.dict())
-            await db.chat_sessions.insert_one(session_dict)
-        
-        # Save user message
-        try:
+        while True:
+            data = await websocket.receive_text()
+            message_data = json.loads(data)
+            
+            user_message = message_data.get('message', '').strip()
+
+            if not user_message:
+                await manager.send_personal_message(json.dumps({
+                    "response": "Message cannot be empty.",
+                    "sender": "ai",
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                }), session_id)
+                continue
+
+            user_message = validate_and_prepare_message(user_message, "user")
+            language = detect_language(user_message)
+
+            session_exists = await db.chat_sessions.find_one({"id": session_id})
+            if not session_exists:
+                session = ChatSession(id=session_id, language=language)
+                session_dict = prepare_for_mongo(session.dict())
+                await db.chat_sessions.insert_one(session_dict)
+
             user_msg = ChatMessage(
                 session_id=session_id,
                 message=user_message,
@@ -434,15 +401,11 @@ async def chat_endpoint(message: dict):
             )
             user_msg_dict = prepare_for_mongo(user_msg.dict())
             await db.chat_messages.insert_one(user_msg_dict)
-        except Exception as e:
-            logging.error(f"Error saving user message: {e}")
-            raise HTTPException(status_code=500, detail="Error saving message")
-        
-        # Get AI response
-        biblical_response = await get_biblical_guidance(user_message, session_id, language)
-        
-        # Save AI response with proper validation
-        try:
+            
+            await manager.send_personal_message(json.dumps(user_msg_dict), session_id)
+
+            biblical_response = await get_biblical_guidance(user_message, session_id, language)
+
             ai_response_text = validate_and_prepare_message(biblical_response.response, "ai")
             ai_msg = ChatMessage(
                 session_id=session_id,
@@ -453,62 +416,25 @@ async def chat_endpoint(message: dict):
             )
             ai_msg_dict = prepare_for_mongo(ai_msg.dict())
             await db.chat_messages.insert_one(ai_msg_dict)
-        except Exception as e:
-            logging.error(f"Error saving AI message: {e}")
-            # Continue even if save fails, user still gets response
-        
-        return {
-            "response": biblical_response.response,
-            "cited_verses": biblical_response.cited_verses,
-            "session_id": session_id,
-            "language": language,
-            "status": "success"
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logging.error(f"Error in chat endpoint: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error occurred")
+            
+            await manager.send_personal_message(json.dumps(ai_msg_dict), session_id)
 
-@api_router.get("/chat/{session_id}", response_model=List[dict])
-async def get_chat_history(session_id: str):
-    """Get chat history for a session with validation"""
-    try:
-        # Validate session ID
-        if not validate_session_id(session_id):
-            raise HTTPException(status_code=400, detail="Invalid session ID format")
-        
-        # Get messages with limit to prevent large responses
-        messages = await db.chat_messages.find(
-            {"session_id": session_id}
-        ).sort("timestamp", 1).limit(200).to_list(200)
-        
-        # Clean up MongoDB ObjectId and other non-serializable fields
-        cleaned_messages = []
-        for msg in messages:
-            try:
-                # Remove MongoDB ObjectId
-                if '_id' in msg:
-                    del msg['_id']
-                # Parse datetime fields
-                msg = parse_from_mongo(msg)
-                cleaned_messages.append(msg)
-            except Exception as e:
-                logging.warning(f"Error processing message: {e}")
-                continue
-        
-        return cleaned_messages
-        
-    except HTTPException:
-        raise
+    except WebSocketDisconnect:
+        manager.disconnect(session_id)
     except Exception as e:
-        logging.error(f"Error getting chat history: {e}")
-        raise HTTPException(status_code=500, detail="Error retrieving chat history")
+        logging.error(f"WebSocket error: {e}")
+        error_message = {
+            "response": "An unexpected error occurred. Please try again.",
+            "sender": "ai",
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+        await manager.send_personal_message(json.dumps(error_message), session_id)
+    finally:
+        manager.disconnect(session_id)
 
 @api_router.post("/session", response_model=dict)
+# @FastAPILimiter.limit("5/minute")
 async def create_session():
-    """Create a new chat session with error handling"""
     try:
         session = ChatSession()
         session_dict = prepare_for_mongo(session.dict())
@@ -525,81 +451,52 @@ async def create_session():
         
     except HTTPException:
         raise
+    except PyMongoError:
+        logging.error("Database error while creating session.")
+        raise HTTPException(status_code=500, detail="Database error creating session.")
     except Exception as e:
-        logging.error(f"Error creating session: {e}")
+        logging.error(f"Unexpected error creating session: {e}")
         raise HTTPException(status_code=500, detail="Error creating session")
+
+@api_router.get("/chat/{session_id}", response_model=List[dict])
+# @FastAPILimiter.limit("20/minute")
+async def get_chat_history(session_id: str):
+    try:
+        if not validate_session_id(session_id):
+            raise HTTPException(status_code=400, detail="Invalid session ID format")
+        
+        messages = await db.chat_messages.find(
+            {"session_id": session_id}
+        ).sort("timestamp", 1).limit(200).to_list(200)
+        
+        cleaned_messages = []
+        for msg in messages:
+            try:
+                if '_id' in msg:
+                    del msg['_id']
+                msg = parse_from_mongo(msg)
+                cleaned_messages.append(msg)
+            except Exception as e:
+                logging.warning(f"Error processing message: {e}")
+                continue
+        
+        return cleaned_messages
+        
+    except HTTPException:
+        raise
+    except PyMongoError:
+        logging.error(f"Database error getting chat history for session {session_id}.")
+        raise HTTPException(status_code=500, detail="Database error retrieving chat history")
+    except Exception as e:
+        logging.error(f"Unexpected error getting chat history: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error occurred")
 
 @api_router.get("/")
 async def root():
     return {"message": "Preacher.ai Backend Running", "status": "healthy"}
 
-# Server-Sent Events endpoint for real-time updates
-@api_router.get("/stream/{session_id}")
-async def stream_chat_updates(session_id: str):
-    """Server-Sent Events endpoint for real-time chat updates"""
-    from fastapi.responses import StreamingResponse
-    
-    async def event_generator():
-        try:
-            # Send initial connection message
-            yield f"data: {json.dumps({'type': 'connected', 'session_id': session_id})}\n\n"
-            
-            # Keep connection alive with periodic heartbeat
-            last_message_count = 0
-            while True:
-                try:
-                    # Check for new messages in this session
-                    messages = await db.chat_messages.find(
-                        {"session_id": session_id}
-                    ).sort("timestamp", 1).to_list(1000)
-                    
-                    current_count = len(messages)
-                    if current_count > last_message_count:
-                        # New messages found, send the latest one
-                        latest_message = messages[-1] if messages else None
-                        if latest_message:
-                            # Clean up MongoDB ObjectId
-                            if '_id' in latest_message:
-                                del latest_message['_id']
-                            latest_message = parse_from_mongo(latest_message)
-                            
-                            yield f"data: {json.dumps({'type': 'new_message', 'message': latest_message})}\n\n"
-                        
-                        last_message_count = current_count
-                    
-                    # Send heartbeat every 30 seconds
-                    yield f"data: {json.dumps({'type': 'heartbeat', 'timestamp': datetime.now(timezone.utc).isoformat()})}\n\n"
-                    
-                    # Wait before next check
-                    await asyncio.sleep(5)
-                    
-                except Exception as e:
-                    logging.error(f"SSE stream error: {e}")
-                    yield f"data: {json.dumps({'type': 'error', 'message': 'Stream error occurred'})}\n\n"
-                    break
-                    
-        except Exception as e:
-            logging.error(f"SSE generator error: {e}")
-            yield f"data: {json.dumps({'type': 'error', 'message': 'Connection error'})}\n\n"
-    
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "GET",
-            "Access-Control-Allow-Headers": "Cache-Control"
-        }
-    )
-
-
-
-# Include the router
 app.include_router(api_router)
 
-# CORS and Security Middleware
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
@@ -608,7 +505,6 @@ app.add_middleware(
     allow_headers=["*"],    
 )
 
-# Add security headers
 @app.middleware("http")
 async def add_security_headers(request, call_next):
     response = await call_next(request)
@@ -619,7 +515,6 @@ async def add_security_headers(request, call_next):
     response.headers["Content-Security-Policy"] = "default-src 'self'"
     return response
 
-# Logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'

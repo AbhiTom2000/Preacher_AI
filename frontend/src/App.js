@@ -1,545 +1,239 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import './App.css';
-import axios from 'axios';
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from './components/ui/card';
+import { Avatar, AvatarFallback, AvatarImage } from './components/ui/avatar';
+import { Input } from './components/ui/input';
+import { Button } from './components/ui/button';
+import { Toaster } from './components/ui/toaster';  // ✅ Correct
+import { useToast } from './hooks/use-toast';       // ✅ Correct
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
-
-const ChatMessage = ({ message, isUser, citedVerses = [] }) => {
-  return (
-    <div className={`message-container ${isUser ? 'user-message' : 'ai-message'}`}>
-      <div className="message-bubble">
-        <div className="message-content">
-          {message}
-        </div>
-        {!isUser && citedVerses.length > 0 && (
-          <div className="cited-indicator">
-            <span>📖 {citedVerses.length} verse{citedVerses.length > 1 ? 's' : ''} cited</span>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-};
-
-const VerseCard = ({ verse }) => {
-  const copyToClipboard = () => {
-    const text = `${verse.reference}\n"${verse.text}"`;
-    navigator.clipboard.writeText(text).then(() => {
-      // Could add a toast notification here
-      console.log('Verse copied to clipboard');
-    }).catch(err => {
-      console.error('Failed to copy verse: ', err);
-    });
-  };
-
-  return (
-    <div className="verse-card" onClick={copyToClipboard}>
-      <div className="verse-reference">{verse.reference}</div>
-      <div className="verse-text">"{verse.text}"</div>
-      <div className="copy-hint">Click to copy</div>
-    </div>
-  );
-};
-
-const LoadingSkeleton = () => {
-  return (
-    <div className="message-container ai-message">
-      <div className="message-bubble loading">
-        <div className="loading-dots">
-          <span></span>
-          <span></span>
-          <span></span>
-        </div>
-        <div className="loading-text">Preacher.ai is thinking...</div>
-      </div>
-    </div>
-  );
-};
-
-const CategoryCard = ({ icon, title, description, onClick, large = false }) => {
-  return (
-    <div 
-      className={`category-card ${large ? 'large' : ''}`}
-      onClick={onClick}
-    >
-      <div className="category-icon">{icon}</div>
-      <h3 className="category-title">{title}</h3>
-      <p className="category-description">{description}</p>
-    </div>
-  );
-};
+import { ScrollArea } from './components/ui/scroll-area';
+import Markdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { TypeAnimation } from 'react-type-animation';
 
 function App() {
-  const [currentView, setCurrentView] = useState('home'); // 'home', 'chat', 'explore'
   const [messages, setMessages] = useState([]);
-  const [citedVerses, setCitedVerses] = useState([]);
-  const [inputMessage, setInputMessage] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
+  const [input, setInput] = useState('');
   const [sessionId, setSessionId] = useState(null);
-  const [showVerses, setShowVerses] = useState(false);
-  const [isDarkTheme, setIsDarkTheme] = useState(true);
-  const [language, setLanguage] = useState('english');
-  const [userName] = useState('Friend'); // Could be dynamic
-  
+  const [loading, setLoading] = useState(false);
+  const { toast } = useToast();
   const messagesEndRef = useRef(null);
-  const inputRef = useRef(null);
-  const eventSourceRef = useRef(null);
+  const wsRef = useRef(null);
+  const reconnectAttemptsRef = useRef(0);
+  const MAX_RECONNECT_ATTEMPTS = 5;
 
-  // UseEffect for session creation and SSE connection
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
   useEffect(() => {
-    const createAndConnect = async () => {
-      try {
-        // Create session
-        const response = await axios.post(`${API}/session`);
-        const newSessionId = response.data.session_id;
-        setSessionId(newSessionId);
-
-        // Disconnect from any existing SSE to avoid duplicates
-        if (eventSourceRef.current) {
-          eventSourceRef.current.close();
-        }
-
-        // Connect to SSE stream
-        const eventSource = new EventSource(`${API}/stream/${newSessionId}`);
-        eventSourceRef.current = eventSource;
-
-        eventSource.onmessage = (event) => {
-          const data = JSON.parse(event.data);
-
-          if (data.type === 'new_message' && data.message.sender === 'ai') {
-            setMessages(prev => [...prev, {
-              id: data.message.id,
-              message: data.message.response,
-              sender: 'ai',
-              timestamp: new Date(data.message.timestamp),
-              citedVerses: data.message.cited_verses || []
-            }]);
-            
-            if (data.message.cited_verses && data.message.cited_verses.length > 0) {
-              setCitedVerses(data.message.cited_verses);
-              setShowVerses(true);
-            }
-            setIsLoading(false);
-          } else if (data.type === 'error') {
-            console.error("SSE stream error:", data.message);
-            setIsLoading(false);
+    const storedSessionId = localStorage.getItem('preacher_ai_session_id');
+    if (storedSessionId) {
+      setSessionId(storedSessionId);
+    } else {
+      fetch(`${process.env.REACT_APP_API_BASE_URL}/api/session`, {
+        method: 'POST',
+      })
+        .then(response => response.json())
+        .then(data => {
+          if (data.session_id) {
+            setSessionId(data.session_id);
+            localStorage.setItem('preacher_ai_session_id', data.session_id);
           }
-        };
+        })
+        .catch(error => {
+          console.error('Error creating session:', error);
+          toast({
+            title: "Connection Error",
+            description: "Failed to create a new session. Please refresh the page.",
+            variant: "destructive",
+          });
+        });
+    }
+  }, [toast]);
 
-        eventSource.onerror = (error) => {
-          console.error("SSE connection error:", error);
-          setIsLoading(false);
-        };
-      } catch (error) {
-        console.error('Error creating session or connecting to SSE:', error);
-      }
+  // NEW: WebSocket connection logic
+  useEffect(() => {
+    if (!sessionId) return;
+    
+    let ws = null;
+    let timeoutId = null;
+
+    const connectWebSocket = () => {
+      ws = new WebSocket(`${process.env.REACT_APP_WEBSOCKET_URL}/ws/chat/${sessionId}`);
+
+      ws.onopen = () => {
+        console.log('WebSocket connected');
+        reconnectAttemptsRef.current = 0;
+        setLoading(false);
+      };
+
+      ws.onmessage = (event) => {
+        const message = JSON.parse(event.data);
+        setMessages(prevMessages => [...prevMessages, message]);
+        setLoading(false);
+      };
+
+      ws.onclose = (event) => {
+        console.log('WebSocket disconnected', event);
+        if (reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
+          const delay = Math.pow(2, reconnectAttemptsRef.current) * 1000;
+          timeoutId = setTimeout(() => {
+            reconnectAttemptsRef.current++;
+            console.log(`Attempting to reconnect... attempt ${reconnectAttemptsRef.current}`);
+            connectWebSocket();
+          }, delay);
+        } else {
+          toast({
+            title: "Connection Lost",
+            description: "Chat connection lost. Please refresh the page.",
+            variant: "destructive",
+          });
+        }
+      };
+
+      ws.onerror = (error) => {
+        console.error('WebSocket error:', error);
+        ws.close();
+      };
+
+      wsRef.current = ws;
     };
 
-    createAndConnect();
+    connectWebSocket();
 
-    // Cleanup function to close the SSE connection on component unmount
     return () => {
-      if (eventSourceRef.current) {
-        eventSourceRef.current.close();
+      clearTimeout(timeoutId);
+      if (wsRef.current) {
+        wsRef.current.close();
       }
     };
-  }, []); // Empty dependency array ensures this runs once
+  }, [sessionId, toast]);
 
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
-
-  const sendMessage = async (message = inputMessage) => {
-    if (!message.trim() || !sessionId || isLoading) return;
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!input.trim() || !sessionId || loading || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      toast({
+        title: "Connection Status",
+        description: "Please wait for the connection to be established.",
+        variant: "destructive",
+      });
+      return;
+    }
 
     const userMessage = {
-      id: Date.now(),
-      message: message,
+      message: input,
       sender: 'user',
-      timestamp: new Date()
-    };
-
-    setMessages(prev => [...prev, userMessage]);
-    setInputMessage('');
-    setIsLoading(true);
-
-    try {
-      // Send message to the backend
-      await axios.post(`${API}/chat`, {
-        message: message,
-        session_id: sessionId
-      });
-      // The AI response will be handled by the SSE listener
-    } catch (error) {
-      console.error('Error sending message:', error);
-      const errorMessage = {
-        id: Date.now() + 1,
-        message: 'I apologize, but I\'m having trouble connecting right now. Please try again in a moment.',
-        sender: 'ai',
-        timestamp: new Date(),
-        citedVerses: []
-      };
-      setMessages(prev => [...prev, errorMessage]);
-      setIsLoading(false);
-    }
-  };
-
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    sendMessage();
-  };
-
-  const handleKeyPress = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      sendMessage();
-    }
-  };
-
-  const toggleTheme = () => {
-    setIsDarkTheme(!isDarkTheme);
-  };
-
-  const toggleLanguage = () => {
-    setLanguage(language === 'english' ? 'hindi' : 'english');
-  };
-
-  const startTapToChat = () => {
-    setCurrentView('chat');
-    setMessages([]);
-    setCitedVerses([]);
-  };
-
-  const handleCategoryClick = (category) => {
-    setCurrentView('chat');
-    
-    const categoryQuestions = {
-      'Peace & Comfort': "How can I find peace and comfort in difficult times?",
-      'Forgiveness': "What does the Bible teach about forgiveness?",
-      'Faith & Trust': "How can I strengthen my faith and trust in God?",
-      'Prayer': "How can I improve my prayer life?",
-      'Purpose': "What is God's purpose for my life?",
-      'Relationships': "What does the Bible say about relationships and love?",
-      'Anxiety': "How can I overcome anxiety and worry through faith?",
-      'Wisdom': "How can I gain biblical wisdom for decisions?"
+      sessionId: sessionId,
+      timestamp: new Date().toISOString()
     };
     
-    const question = categoryQuestions[category] || `Tell me about ${category} from a biblical perspective.`;
-    sendMessage(question);
+    setLoading(true);
+    setInput('');
+    
+    // Send message via WebSocket
+    wsRef.current.send(JSON.stringify(userMessage));
   };
 
-  const backToHome = () => {
-    setCurrentView('home');
-    setShowVerses(false);
+  const getAvatarFallback = (sender) => {
+    if (sender === 'ai') return 'AI';
+    return 'You';
   };
 
-  // Home View
-  if (currentView === 'home') {
-    return (
-      <div className={`app ${isDarkTheme ? 'dark-theme' : 'light-theme'}`}>
-        {/* Header */}
-        <header className="app-header">
-          <div className="header-content">
-            <div className="user-greeting">
-              <div className="user-avatar">🙏</div>
-              <div className="invite-section">
-                <button className="invite-btn">+ Invite</button>
-                <button className="menu-btn">☰</button>
-              </div>
-            </div>
-            <div className="header-controls">
-              <button 
-                className="language-toggle"
-                onClick={toggleLanguage}
-                title="Switch Language"
-              >
-                {language === 'english' ? 'हिं' : 'EN'}
-              </button>
-              <button 
-                className="theme-toggle"
-                onClick={toggleTheme}
-                title="Toggle Theme"
-              >
-                {isDarkTheme ? '☀️' : '🌙'}
-              </button>
-            </div>
-          </div>
-        </header>
+  const isAiSpeaking = messages.length > 0 && messages[messages.length - 1].sender === 'ai' && loading;
 
-        {/* Main Content */}
-        <main className="main-content">
-          {/* Greeting */}
-          <div className="greeting-section">
-            <h1>Hi, {userName} 👋</h1>
-          </div>
-
-          {/* Tap to Chat Section */}
-          <div className="tap-chat-section" onClick={startTapToChat}>
-            <div className="chat-circle">
-              <div className="audio-waves">
-                <span></span>
-                <span></span>
-                <span></span>
-                <span></span>
-                <span></span>
-              </div>
-            </div>
-            <h2>Tap to chat</h2>
-            <p>Get biblical guidance and wisdom</p>
-          </div>
-
-          {/* Explore Section */}
-          <div className="explore-section">
-            <div className="section-header">
-              <h2>Explore</h2>
-              <button 
-                className="explore-all-btn"
-                onClick={() => setCurrentView('explore')}
-              >
-                View All
-              </button>
-            </div>
-            
-            <div className="categories-grid-home">
-              <CategoryCard
-                icon="☮️"
-                title="Peace & Comfort"
-                description="Find peace in difficult times through Scripture"
-                onClick={() => handleCategoryClick('Peace & Comfort')}
-              />
-              <CategoryCard
-                icon="💝"
-                title="Forgiveness"
-                description="Learn about God's forgiveness and grace"
-                onClick={() => handleCategoryClick('Forgiveness')}
-              />
-            </div>
-          </div>
-
-          {/* Bottom Navigation */}
-          <nav className="bottom-nav">
-            <button className="nav-item active">
-              <span className="nav-icon">⚪</span>
-            </button>
-            <button className="nav-item">
-              <span className="nav-icon">🎤</span>
-            </button>
-            <button className="nav-item">
-              <span className="nav-icon">👁️</span>
-            </button>
-            <button className="nav-item">
-              <span className="nav-icon">🎯</span>
-            </button>
-          </nav>
-        </main>
-      </div>
-    );
-  }
-
-  // Explore View
-  if (currentView === 'explore') {
-    return (
-      <div className={`app ${isDarkTheme ? 'dark-theme' : 'light-theme'}`}>
-        {/* Header */}
-        <header className="app-header">
-          <div className="header-content">
-            <button className="back-btn" onClick={backToHome}>←</button>
-            <h1>Explore</h1>
-            <div className="header-controls">
-              <button 
-                className="language-toggle"
-                onClick={toggleLanguage}
-                title="Switch Language"
-              >
-                {language === 'english' ? 'हिं' : 'EN'}
-              </button>
-              <button 
-                className="theme-toggle"
-                onClick={toggleTheme}
-                title="Toggle Theme"
-              >
-                {isDarkTheme ? '☀️' : '🌙'}
-              </button>
-            </div>
-          </div>
-        </header>
-
-        {/* Main Content */}
-        <main className="main-content">
-          <div className="categories-grid-full">
-            <CategoryCard
-              icon="☮️"
-              title="Peace & Comfort"
-              description="Find peace in difficult times through biblical wisdom"
-              onClick={() => handleCategoryClick('Peace & Comfort')}
-            />
-            <CategoryCard
-              icon="💝"
-              title="Forgiveness"
-              description="Learn about God's forgiveness and how to forgive others"
-              onClick={() => handleCategoryClick('Forgiveness')}
-            />
-            <CategoryCard
-              icon="🛡️"
-              title="Faith & Trust"
-              description="Strengthen your faith and trust in God's plan"
-              onClick={() => handleCategoryClick('Faith & Trust')}
-            />
-            <CategoryCard
-              icon="🙏"
-              title="Prayer"
-              description="Improve your prayer life with biblical guidance"
-              onClick={() => handleCategoryClick('Prayer')}
-            />
-            <CategoryCard
-              icon="🎯"
-              title="Purpose"
-              description="Discover God's purpose and calling for your life"
-              onClick={() => handleCategoryClick('Purpose')}
-            />
-            <CategoryCard
-              icon="💕"
-              title="Relationships"
-              description="Biblical wisdom for relationships and love"
-              onClick={() => handleCategoryClick('Relationships')}
-            />
-            <CategoryCard
-              icon="🌅"
-              title="Anxiety"
-              description="Overcome anxiety and worry through faith"
-              onClick={() => handleCategoryClick('Anxiety')}
-            />
-            <CategoryCard
-              icon="🦉"
-              title="Wisdom"
-              description="Gain biblical wisdom for life's decisions"
-              onClick={() => handleCategoryClick('Wisdom')}
-            />
-          </div>
-
-          {/* Bottom Navigation */}
-          <nav className="bottom-nav">
-            <button className="nav-item">
-              <span className="nav-icon">⚪</span>
-            </button>
-            <button className="nav-item">
-              <span className="nav-icon">🎤</span>
-            </button>
-            <button className="nav-item active">
-              <span className="nav-icon">👁️</span>
-            </button>
-            <button className="nav-item">
-              <span className="nav-icon">🎯</span>
-            </button>
-          </nav>
-        </main>
-      </div>
-    );
-  }
-
-  // Chat View
   return (
-    <div className={`app ${isDarkTheme ? 'dark-theme' : 'light-theme'}`}>
-      {/* Header */}
-      <header className="app-header">
-        <div className="header-content">
-          <button className="back-btn" onClick={backToHome}>←</button>
-          <div className="chat-header-info">
-            <h1>Preacher.ai</h1>
-            <span className="subtitle">Biblical Guidance</span>
-          </div>
-          <div className="header-controls">
-            {citedVerses.length > 0 && (
-              <button 
-                className={`verses-toggle ${showVerses ? 'active' : ''}`}
-                onClick={() => setShowVerses(!showVerses)}
-                title="Toggle Verses Panel"
-              >
-                📖 {citedVerses.length}
-              </button>
-            )}
-            <button 
-                className="theme-toggle"
-                onClick={toggleTheme}
-                title="Toggle Theme"
-              >
-                {isDarkTheme ? '☀️' : '🌙'}
-              </button>
-          </div>
-        </div>
-      </header>
-
-      {/* Main Content */}
-      <main className="chat-main-content">
-        {/* Chat Panel */}
-        <div className="chat-panel">
-          <div className="messages-container">
-            {messages.map((msg) => (
-              <ChatMessage
-                key={msg.id}
-                message={msg.message}
-                isUser={msg.sender === 'user'}
-                citedVerses={msg.citedVerses}
-              />
-            ))}
-            {isLoading && <LoadingSkeleton />}
-            <div ref={messagesEndRef} />
-          </div>
-
-          {/* Input Area */}
-          <form className="input-container" onSubmit={handleSubmit}>
-            <div className="input-wrapper">
-              <textarea
-                ref={inputRef}
-                value={inputMessage}
-                onChange={(e) => setInputMessage(e.target.value)}
-                onKeyPress={handleKeyPress}
-                placeholder={language === 'english' 
-                  ? "Ask for biblical guidance..." 
-                  : "बाइबल मार्गदर्शन के लिए पूछें..."
-                }
-                disabled={isLoading}
-                rows="1"
-              />
-              <button 
-                type="submit" 
-                className="send-button"
-                disabled={!inputMessage.trim() || isLoading}
-              >
-                {isLoading ? '⏳' : '➤'}
-              </button>
+    <div className="flex h-screen w-full flex-col items-center justify-center p-4 bg-gray-50 dark:bg-gray-950">
+      <Toaster />
+      <Card className="w-full max-w-2xl h-full flex flex-col bg-white dark:bg-gray-900 border-gray-200 dark:border-gray-800 rounded-xl shadow-lg">
+        <CardHeader className="border-b p-4 border-gray-200 dark:border-gray-800 flex flex-row items-center justify-between">
+          <CardTitle className="text-xl font-bold text-gray-900 dark:text-gray-50">Preacher.ai</CardTitle>
+          <CardDescription className="text-sm text-gray-500 dark:text-gray-400">Your gentle spiritual companion</CardDescription>
+        </CardHeader>
+        <CardContent className="flex-1 p-4 overflow-y-auto">
+          <ScrollArea className="h-full">
+            <div className="space-y-4">
+              {messages.map((msg, index) => (
+                <div key={index} className={`flex items-start gap-4 ${msg.sender === 'user' ? 'justify-end' : ''}`}>
+                  {msg.sender === 'ai' && (
+                    <Avatar className="w-8 h-8">
+                      <AvatarImage src="/placeholder-user.jpg" />
+                      <AvatarFallback className="bg-blue-500 text-white dark:bg-blue-600">AI</AvatarFallback>
+                    </Avatar>
+                  )}
+                  <div
+                    className={`rounded-lg p-3 max-w-[80%] ${
+                      msg.sender === 'user'
+                        ? 'bg-blue-500 text-white dark:bg-blue-600'
+                        : 'bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-gray-50'
+                    }`}
+                  >
+                    <Markdown remarkPlugins={[remarkGfm]}>{msg.message}</Markdown>
+                    {msg.cited_verses && msg.cited_verses.length > 0 && (
+                      <div className="mt-2 text-xs text-gray-600 dark:text-gray-400">
+                        <h4 className="font-semibold">Cited Verses:</h4>
+                        <ul className="list-disc list-inside">
+                          {msg.cited_verses.map((verse, vIndex) => (
+                            <li key={vIndex}>{verse.reference}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                  {msg.sender === 'user' && (
+                    <Avatar className="w-8 h-8">
+                      <AvatarImage src="/placeholder-user.jpg" />
+                      <AvatarFallback className="bg-gray-500 text-white dark:bg-gray-700">You</AvatarFallback>
+                    </Avatar>
+                  )}
+                </div>
+              ))}
+              {loading && (
+                <div className="flex items-start gap-4">
+                  <Avatar className="w-8 h-8">
+                    <AvatarImage src="/placeholder-user.jpg" />
+                    <AvatarFallback className="bg-blue-500 text-white dark:bg-blue-600">AI</AvatarFallback>
+                  </Avatar>
+                  <div className="rounded-lg p-3 max-w-[80%] bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-gray-50">
+                    <TypeAnimation
+                      sequence={[
+                        '...',
+                        1000,
+                        '',
+                      ]}
+                      wrapper="span"
+                      cursor={true}
+                      repeat={Infinity}
+                      speed={50}
+                      deletionSpeed={90}
+                    />
+                  </div>
+                </div>
+              )}
+              <div ref={messagesEndRef} />
             </div>
+          </ScrollArea>
+        </CardContent>
+        <CardFooter className="p-4 border-t border-gray-200 dark:border-gray-800">
+          <form className="flex w-full space-x-2" onSubmit={handleSubmit}>
+            <Input
+              className="flex-1"
+              placeholder="Type your message..."
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              disabled={loading}
+            />
+            <Button type="submit" disabled={loading}>
+              Send
+            </Button>
           </form>
-        </div>
-
-        {/* Verses Panel */}
-        <div className={`verses-panel ${showVerses ? 'visible' : ''}`}>
-          <div className="verses-header">
-            <h3>📖 Cited Scripture</h3>
-            <button 
-              className="close-verses"
-              onClick={() => setShowVerses(false)}
-            >
-              ✕
-            </button>
-          </div>
-          <div className="verses-content">
-            {citedVerses.map((verse, index) => (
-              <VerseCard key={index} verse={verse} />
-            ))}
-            {citedVerses.length === 0 && (
-              <div style={{textAlign: 'center', color: 'var(--text-muted)', padding: '2rem'}}>
-                No verses cited yet. Ask a spiritual question to see Bible verse citations.
-              </div>
-            )}
-          </div>
-        </div>
-      </main>
+        </CardFooter>
+      </Card>
     </div>
   );
 }
