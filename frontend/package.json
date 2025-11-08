@@ -51,7 +51,6 @@
     "react-scripts": "^5.0.1",
     "react-type-animation": "^3.2.0",
     "remark-gfm": "^4.0.1",
-    "socket.io-client": "^4.8.1",
     "sonner": "^2.0.3",
     "tailwind-merge": "^3.3.1",
     "tailwindcss-animate": "^1.0.7",
@@ -59,38 +58,32 @@
     "zod": "^3.24.4"
   },
   "scripts": {
-    "start": "node node_modules/react-scripts/bin/react-scripts.js start",
-    "build": "node node_modules/react-scripts/bin/react-scripts.js build",
-    "test": "node node_modules/react-scripts/bin/react-scripts.js test",
-    "eject": "npx react-scripts eject"
+    "start": "react-scripts start",
+    "build": "react-scripts build",
+    "test": "react-scripts test",
+    "eject": "react-scripts eject"
   },
   "browserslist": {
-    "production": [
-      ">0.2%",
-      "not dead",
-      "not op_mini all"
-    ],
-    "development": [
-      "last 1 chrome version",
-      "last 1 firefox version",
-      "last 1 safari version"
-    ]
+    "production": [">0.2%","not dead","not op_mini all"],
+    "development": ["last 1 chrome version","last 1 firefox version","last 1 safari version"]
   },
   "devDependencies": {
     "@eslint/js": "9.23.0",
     "autoprefixer": "^10.4.20",
-    "eslint": "9.38.0",
+    "eslint": "8.57.0",
     "eslint-plugin-import": "2.31.0",
     "eslint-plugin-jsx-a11y": "6.10.2",
     "eslint-plugin-react": "7.37.4",
     "globals": "15.15.0",
-    "postcss": "^8.4.49",
+    "postcss": "8.4.38",
     "tailwindcss": "^3.4.17"
   },
-  "resolutions": {
-    "nth-check": "2.0.1",
+  "overrides": {
     "postcss": "8.4.38",
-    "svgo": "3.3.2"
+    "svgo": "3.3.2",
+    "nth-check": "2.0.1",
+    "webpack-dev-server": "4.15.2"
   },
-  "packageManager": "yarn@1.22.22+sha512.a6b2f7906b721bba3d67d4aff083df04dad64c399707841b7acf00f6b133b7ac24255f2652fa22ae3534329dc6180534e98d17432037ff6fd140556e2bb3137e"
+  "engines": { "node": ">=18", "npm": ">=9" },
+  "proxy": "http://localhost:8000"
 }
