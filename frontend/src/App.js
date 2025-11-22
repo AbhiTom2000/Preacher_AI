@@ -249,8 +249,8 @@ function LandingPage({ onGetStarted }) {
       <section className="py-20 px-4 sm:px-6 lg:px-8 relative overflow-hidden">
         <div className="absolute inset-0 bg-gradient-to-r from-white/5 to-white/5"></div>
         <div className="max-w-4xl mx-auto text-center relative z-10">
-          <h2 className="text-4xl sm:text-5xl font-bold mb-6 text-white">Ready to Transform Your Ministry?</h2>
-          <p className="text-xl text-gray-300 mb-8">Join pastors and ministry leaders using Preacher AI.</p>
+          <h2 className="text-4xl sm:text-5xl font-bold mb-6 text-white">Ready to Get Biblified?</h2>
+          <p className="text-xl text-gray-300 mb-8">Have your own pastor using Preacher AI.</p>
           <button
             onClick={onGetStarted}
             className="group relative px-10 py-5 bg-white hover:bg-gray-200 text-black rounded-full font-semibold text-lg overflow-hidden transition-all duration-300 transform hover:scale-105 shadow-2xl shadow-white/30"
@@ -274,7 +274,7 @@ function LandingPage({ onGetStarted }) {
               <span className="text-xl font-bold text-white">Preacher AI</span>
             </div>
             <div className="text-gray-400 text-center md:text-left">
-              <p>&copy; 2024 Preacher AI. Empowering ministry through technology.</p>
+              <p>&copy; 2025 Preacher AI. Empowering Bible through technology.</p>
             </div>
           </div>
         </div>
@@ -725,7 +725,21 @@ function ChatInterface({ onBack }) {
                   <div className="flex items-start justify-between mb-3">
                     <h4 className="font-semibold text-white text-sm">{v.reference}</h4>
                     <button
-                      onClick={() => navigator.clipboard.writeText(`${v.reference} — ${v.text}`)}
+                      onClick={() => {
+                        // Using document.execCommand as navigator.clipboard.writeText may not work in iframes
+                        const textToCopy = `${v.reference} — ${v.text}`;
+                        const textArea = document.createElement('textarea');
+                        textArea.value = textToCopy;
+                        document.body.appendChild(textArea);
+                        textArea.focus();
+                        textArea.select();
+                        try {
+                          document.execCommand('copy');
+                        } catch (err) {
+                          console.error('Failed to copy text: ', err);
+                        }
+                        document.body.removeChild(textArea);
+                      }}
                       className="opacity-0 group-hover:opacity-100 p-1.5 text-gray-400 hover:text-white hover:bg-white/5 rounded-lg transition-all"
                       title="Copy verse"
                     >
