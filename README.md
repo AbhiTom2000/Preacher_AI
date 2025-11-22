@@ -1,70 +1,131 @@
-# Getting Started with Create React App
+# 🕊️ Preacher AI: Your AI-Powered Pastoral Companion
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+## 💡 Project Overview: AI for Social Impact
 
-## Available Scripts
+**Preacher AI** is a low-cost, highly accessible **Retrieval-Augmented Generation (RAG)** system designed to provide **24/7, scripture-grounded spiritual and pastoral guidance**.
 
-In the project directory, you can run:
+It addresses key community challenges:
+- Limited access to emotional/spiritual support
+- Language barriers in theological understanding
+- AI model hallucinations in religious contexts
 
-### `npm start`
+By anchoring Gemini LLM’s responses to **verified biblical text** stored in a **FAISS semantic vector database**, Preacher AI ensures **theological reliability** while keeping **operational costs minimal**.
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+---
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
+## ✨ Core Features
 
-### `npm test`
+| Feature | Description | Impact |
+|--------|-------------|--------|
+| 📖 Scripture-Grounded Responses | RAG pipeline retrieves Bible verses for every response | Prevents theological inaccuracies |
+| 🌍 Multi-Lingual Support | English + Hindi retrieval and conversation | Greater faith accessibility |
+| ⚙️ Low-Cost Architecture | FAISS + async FastAPI + WebSockets | High scalability at minimal cost |
+| 📌 24/7 Emotional Support | Empathetic pastoral guidance | Mental & emotional well-being |
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+---
 
-### `npm run build`
+## ⚙️ Setup & Available Scripts
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+To run this application, start **both** the Backend API (FastAPI) and the Frontend App (React).
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+---
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+### 🧠 1️⃣ Backend Setup (FastAPI RAG Server)
 
-### `npm run eject`
+This handles the RAG engine + real-time WebSocket chat.
 
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
+#### Prerequisites
+- Python 3.10+
+- Gemini API Key (environment variable)
 
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+```bash
+cd backend
+pip install -r requirements.txt
+```
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
+#### Set Gemini key:
 
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
+```bash
+export GEMINI_API_KEY="YOUR_API_KEY_HERE"
+```
 
-## Learn More
+#### Run server:
 
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
+```bash
+uvicorn server:app --reload --ws-max-size 10000000
+```
 
-To learn React, check out the [React documentation](https://reactjs.org/).
+Backend available at:
+➡️ **http://127.0.0.1:8000**
 
-### Code Splitting
+---
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
+### 💬 2️⃣ Frontend Setup (React Chat UI)
 
-### Analyzing the Bundle Size
+```bash
+cd frontend
+npm install
+npm start
+```
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
+Frontend available at:
+➡️ **http://localhost:3000**
 
-### Making a Progressive Web App
+> Backend must be running FIRST ⚡
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
+---
 
-### Advanced Configuration
+## 🏛️ System Architecture
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
+| Component | Tech Stack | Role | Social Impact Alignment |
+|----------|------------|------|-----------------------|
+| Frontend | React.js, Tailwind CSS, WebSockets | Chat UI | Mobile-first + Low bandwidth use |
+| Backend API | FastAPI, Python, Uvicorn | RAG + Real-time WS | Low cost + High concurrency |
+| LLM | Google Gemini | Empathetic pastor-like responses | Emotional/Spiritual well-being |
+| RAG/Search | FAISS + Sentence-Transformers | Scripture retrieval | Trustworthy biblical grounding |
+| Data Storage | JSON + FAISS Index | Bible data & embeddings | English + Hindi accessibility |
 
-### Deployment
+---
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
+## 📦 Repository Structure
 
-### `npm run build` fails to minify
+```
+preacher_ai/
+├── backend/                  # RAG Engine (FastAPI)
+│   ├── storage/              # Bible text + vector index
+│   │   ├── english_bible_verses.json
+│   │   └── faiss/
+│   ├── requirements.txt
+│   └── server.py
+└── frontend/                 # React UI
+    ├── public/
+    ├── src/
+    │   ├── App.js
+    │   └── assets/           # logo + backgrounds
+    └── package.json
+```
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+---
+
+## 🤝 Contributing
+
+We welcome all contributions! 🌍
+
+```bash
+git checkout -b feature/AmazingFeature
+# implement your idea 🎯
+git commit -m "Add amazing feature"
+git push origin feature/AmazingFeature
+```
+
+Then create a Pull Request 🙌
+
+---
+
+## 📜 License
+
+This project is licensed under the **MIT License**.  
+
+---
+
+🚀 *Preacher AI: Empowering Bible through technology.*
