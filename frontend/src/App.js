@@ -274,7 +274,7 @@ function LandingPage({ onGetStarted }) {
               <span className="text-xl font-bold text-white">Preacher AI</span>
             </div>
             <div className="text-gray-400 text-center md:text-left">
-              <p>&copy; 2025 Preacher AI. Empowering Bible through technology.</p>
+              <p>&copy; 2026 Preacher AI. Empowering Bible through technology.</p>
             </div>
           </div>
         </div>
