@@ -292,8 +292,113 @@ function LandingPage({ onGetStarted }) {
   );
 }
 
+//Chat Side-bar Component
+function ChatSidebar({ currentSessionId, onSelectSession, onNewChat, isOpen, onClose }) {
+  const [sessions, setSessions] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/api/sessions`)
+      .then(r => r.json())
+      .then(data => { setSessions(data); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [currentSessionId]); // refetch when session changes
+
+  const formatDate = (isoString) => {
+    if (!isoString) return '';
+    const date = new Date(isoString);
+    const now = new Date();
+    const diffDays = Math.floor((now - date) / (1000 * 60 * 60 * 24));
+    if (diffDays === 0) return 'Today';
+    if (diffDays === 1) return 'Yesterday';
+    if (diffDays < 7) return `${diffDays} days ago`;
+    return date.toLocaleDateString();
+  };
+
+  return (
+    <>
+      {/* Overlay for mobile */}
+      {isOpen && (
+        <div
+          className="md:hidden fixed inset-0 bg-black/60 z-40 backdrop-blur-sm"
+          onClick={onClose}
+        />
+      )}
+
+      {/* Sidebar */}
+      <div className={`
+        fixed md:relative z-50 md:z-auto
+        h-full w-72 flex-shrink-0
+        bg-gradient-to-b from-gray-950 to-black
+        border-r border-white/10
+        flex flex-col
+        transition-transform duration-300
+        ${isOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
+      `}>
+        {/* Sidebar Header */}
+        <div className="px-4 py-5 border-b border-white/10 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <img src={logoImg} alt="Preacher AI" className="w-6 h-6 object-contain" />
+            <span className="text-sm font-semibold text-white">Conversations</span>
+          </div>
+          <button
+            onClick={onClose}
+            className="md:hidden p-1.5 text-gray-400 hover:text-white hover:bg-white/5 rounded-lg transition-all"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* New Chat Button */}
+        <div className="p-3">
+          <button
+            onClick={onNewChat}
+            className="w-full flex items-center gap-3 px-4 py-3 rounded-xl border border-white/10 hover:border-white/20 hover:bg-white/5 text-gray-300 hover:text-white transition-all text-sm font-medium"
+          >
+            <span className="text-lg leading-none">+</span>
+            New conversation
+          </button>
+        </div>
+
+        {/* Sessions List */}
+        <div className="flex-1 overflow-y-auto px-3 pb-4 space-y-1">
+          {loading ? (
+            <div className="flex items-center justify-center py-8">
+              <Loader2 className="w-5 h-5 animate-spin text-gray-500" />
+            </div>
+          ) : sessions.length === 0 ? (
+            <p className="text-xs text-gray-500 text-center py-8 px-4">
+              No conversations yet. Start chatting!
+            </p>
+          ) : (
+            sessions.map(session => (
+              <button
+                key={session.id}
+                onClick={() => { onSelectSession(session.id); onClose(); }}
+                className={`w-full text-left px-3 py-3 rounded-xl transition-all group ${
+                  session.id === currentSessionId
+                    ? 'bg-white/10 border border-white/20 text-white'
+                    : 'hover:bg-white/5 border border-transparent hover:border-white/10 text-gray-400 hover:text-gray-200'
+                }`}
+              >
+                <p className="text-sm font-medium truncate leading-snug">
+                  {session.preview}
+                </p>
+                <p className="text-xs text-gray-500 mt-1">
+                  {formatDate(session.created_at)}
+                </p>
+              </button>
+            ))
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
+
 // Chat Interface Component
 function ChatInterface({ onBack }) {
+
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState([]);
   const [isTyping, setIsTyping] = useState(false);
@@ -305,11 +410,45 @@ function ChatInterface({ onBack }) {
   const [explaining, setExplaining] = useState({});
   const [explanations, setExplanations] = useState({});
   const [explainErrors, setExplainErrors] = useState({});
+  
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  // Add this: load history when switching sessions
+  const loadSession = useCallback(async (sid) => {
+    localStorage.setItem(SESSION_KEY, sid);
+    sessionIdRef.current = sid;
+    setMessages([]);
+    setVerses([]);
+    setVersesOpen(false);
+
+    try {
+      const res = await fetch(`${API_BASE}/api/chat/${sid}`);
+      const history = await res.json();
+      const formatted = history.map(m => ({
+        id: m.id,
+        role: m.sender === 'user' ? 'user' : 'bot',
+        content: m.message
+      }));
+      setMessages(formatted);
+    } catch (e) {
+      console.error('Failed to load session history', e);
+    }
+
+    if (ws) ws.close(); // triggers reconnect with new session ID
+  }, [ws]);
+
+  const startNewChat = () => {
+    localStorage.removeItem(SESSION_KEY);
+    sessionIdRef.current = getOrCreateSessionId();
+    setMessages([]);
+    setVerses([]);
+    setVersesOpen(false);
+    if (ws) ws.close();
+  };
 
   const scrollRef = useRef(null);
   const sessionIdRef = useRef(getOrCreateSessionId());
   const retryRef = useRef(0);
-
   const StatusDot = ({ status }) => (
     <span
       className={`inline-block w-2 h-2 rounded-full ${
@@ -548,8 +687,22 @@ function ChatInterface({ onBack }) {
   return (
     <div className="min-h-screen bg-gradient-to-br from-black via-gray-950 to-black flex items-center justify-center p-4">
       <div className="w-full max-w-7xl h-[92vh] flex bg-gradient-to-br from-gray-900/40 to-black/60 backdrop-blur-xl border border-white/10 rounded-3xl shadow-2xl overflow-hidden">
+        {/* LEFT SIDEBAR */}
+        <ChatSidebar
+          currentSessionId={sessionIdRef.current}
+          onSelectSession={loadSession}
+          onNewChat={startNewChat}
+          isOpen={sidebarOpen}
+          onClose={() => setSidebarOpen(false)}
+        />
         {/* Main Chat Area */}
         <div className="flex-1 flex flex-col">
+          <button
+            onClick={() => setSidebarOpen(v => !v)}
+            className="md:hidden p-2 text-gray-400 hover:text-white hover:bg-white/5 rounded-xl transition-all"
+          >
+            <Menu className="w-5 h-5" />
+          </button>
           {/* Premium Header */}
           <div className="px-6 py-4 border-b border-white/10 bg-gradient-to-r from-black/60 to-gray-900/60 backdrop-blur-sm">
             <div className="flex items-center justify-between">
@@ -578,9 +731,11 @@ function ChatInterface({ onBack }) {
               </div>
 
               <div className="flex items-center gap-3">
-                <div className="px-3 py-1.5 rounded-full bg-white/5 border border-white/10 backdrop-blur-sm">
-                  <span className="text-xs font-medium text-gray-300">Pastoral Mode</span>
-                </div>
+                <button
+                  onClick={startNewChat}
+                  className="px-4 py-2 text-sm font-medium text-gray-300 hover:text-white border border-white/10 rounded-xl hover:bg-white/5 transition-all hover:border-white/20">
+                  New Chat
+                </button>
                 <button
                   onClick={connectWS}
                   className="px-4 py-2 text-sm font-medium text-gray-300 hover:text-white border border-white/10 rounded-xl hover:bg-white/5 transition-all hover:border-white/20"
