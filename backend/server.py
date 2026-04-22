@@ -46,7 +46,13 @@ llm_client = AsyncOpenAI(api_key=LLM_API_KEY, base_url=LLM_BASE_URL)
 
 # MongoDB connection
 mongo_url = os.environ["MONGO_URL"]
-client = AsyncIOMotorClient(mongo_url)
+client = AsyncIOMotorClient(
+    mongo_url,
+    maxPoolSize=10,          # M0 allows ~100 total, stay conservative
+    minPoolSize=1,
+    connectTimeoutMS=5000,
+    serverSelectionTimeoutMS=5000,
+)
 db = client[os.environ["DB_NAME"]]
 
 # Load Bible verse data
@@ -116,15 +122,10 @@ hindi_index, hindi_verse_map = build_or_load_index("hindi", hindi_verses_data)
 async def lifespan(app: FastAPI):
     try:
         await db.chat_messages.create_index([("session_id", 1), ("timestamp", 1)])
-        await db.chat_sessions.create_index([("id", 1)], unique=True)
         # In lifespan(), add this index:
         await db.chat_messages.create_index(
             [("timestamp", 1)],
             expireAfterSeconds=30 * 24 * 60 * 60  # 30 days
-        )
-        await db.chat_sessions.create_index(
-            [("created_at", 1)],
-            expireAfterSeconds=30 * 24 * 60 * 60
         )
     except Exception as e:
         logger.warning(f"Index creation failed: {e}")
@@ -138,7 +139,7 @@ api_router = APIRouter(prefix="/api")
 
 # ---------------- LLM helpers ----------------
 
-async def _generate_with_retry(messages_history: list, system_instruction: str) -> Optional[str]:
+async def _generate_with_retry(messages_history: list, system_instruction: str):
     for attempt in range(MAX_GEN_RETRIES + 1):
         try:
             response = await llm_client.chat.completions.create(
@@ -149,7 +150,7 @@ async def _generate_with_retry(messages_history: list, system_instruction: str) 
             )
             return response.choices[0].message.content.strip()
         except Exception as e:
-            logger.error(f"LLM Error (attempt {attempt}): {e}")
+            logger.error(f"LLM Error (attempt {attempt+1}/{MAX_GEN_RETRIES+1}): {type(e).__name__}: {e}")
             if attempt < MAX_GEN_RETRIES:
                 await asyncio.sleep(2)
                 continue
@@ -260,7 +261,7 @@ async def websocket_chat_endpoint(websocket: WebSocket, session_id: str):
     if not existing:
         await db.chat_sessions.insert_one({
             "id": session_id,
-            "created_at": datetime.now(timezone.utc).isoformat()
+            "created_at": datetime.now(timezone.utc)
         })
 
     try:
@@ -313,6 +314,15 @@ async def websocket_chat_endpoint(websocket: WebSocket, session_id: str):
             await db.chat_messages.insert_one(ai_msg.dict())
             await manager.send_text(session_id, ai_msg.dict())
 
+            # After inserting ai_msg, trim old messages if session exceeds 100
+            count = await db.chat_messages.count_documents({"session_id": session_id})
+            if count > 100:
+                oldest = await db.chat_messages.find(
+                    {"session_id": session_id}, {"_id": 1}
+                ).sort("timestamp", 1).limit(count - 100).to_list(count - 100)
+                ids = [m["_id"] for m in oldest]
+                await db.chat_messages.delete_many({"_id": {"$in": ids}})
+
     except WebSocketDisconnect:
         manager.disconnect(session_id)
     except Exception as e:
@@ -322,7 +332,8 @@ async def websocket_chat_endpoint(websocket: WebSocket, session_id: str):
 # ---------------- REST ----------------
 @api_router.get("/sessions")
 async def get_all_sessions():
-    sessions = await db.chat_sessions.find().sort("created_at", -1).to_list(50)
+    await db.chat_sessions.create_index([("created_at", -1)])  # descending for sort
+    sessions = await db.chat_sessions.find({}, {"_id": 0}).sort("created_at", -1).to_list(20)
     for s in sessions:
         s.pop("_id", None)
         # Get first user message as preview title
@@ -336,13 +347,15 @@ async def get_all_sessions():
 @api_router.post("/session")
 async def create_session():
     session_id = str(uuid.uuid4())
-    await db.chat_sessions.insert_one({"id": session_id, "created_at": datetime.now(timezone.utc).isoformat()})
+    await db.chat_sessions.insert_one({"id": session_id, "created_at": datetime.now(timezone.utc)})
     return {"session_id": session_id}
 
 @api_router.get("/chat/{session_id}")
 async def get_chat_history(session_id: str):
-    messages = await db.chat_messages.find({"session_id": session_id}).sort("timestamp", 1).to_list(100)
-    for m in messages: m.pop("_id", None)
+    messages = await db.chat_messages.find(
+        {"session_id": session_id},
+        {"_id": 0}   # projection
+    ).sort("timestamp", 1).to_list(100)
     return messages
 
 @api_router.get("/")
