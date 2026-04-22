@@ -117,7 +117,15 @@ async def lifespan(app: FastAPI):
     try:
         await db.chat_messages.create_index([("session_id", 1), ("timestamp", 1)])
         await db.chat_sessions.create_index([("id", 1)], unique=True)
-        await db.analytics_events.create_index([("session_id", 1), ("ts", 1)])
+        # In lifespan(), add this index:
+        await db.chat_messages.create_index(
+            [("timestamp", 1)],
+            expireAfterSeconds=30 * 24 * 60 * 60  # 30 days
+        )
+        await db.chat_sessions.create_index(
+            [("created_at", 1)],
+            expireAfterSeconds=30 * 24 * 60 * 60
+        )
     except Exception as e:
         logger.warning(f"Index creation failed: {e}")
     
@@ -244,31 +252,23 @@ async def get_biblical_guidance(user_message: str, language: str = "english", hi
 
 # ---------------- WebSocket ----------------
 @app.websocket("/ws/chat/{session_id}")
-@app.websocket("/ws/chat/{session_id}")
 async def websocket_chat_endpoint(websocket: WebSocket, session_id: str):
     await manager.connect(websocket, session_id)
+
+    # Auto-register session if it doesn't exist
+    existing = await db.chat_sessions.find_one({"id": session_id})
+    if not existing:
+        await db.chat_sessions.insert_one({
+            "id": session_id,
+            "created_at": datetime.now(timezone.utc).isoformat()
+        })
+
     try:
         while True:
             raw = await websocket.receive_text()
             data = json.loads(raw)
-            user_text = sanitize_input(data.get("message", ""))
-            lang = "hindi" if any("\u0900" <= ch <= "\u097F" for ch in user_text) else "english"
 
-            # Fetch last 10 messages for context window
-            past_messages = await db.chat_messages.find(
-                {"session_id": session_id}
-            ).sort("timestamp", -1).limit(10).to_list(10)
-            past_messages.reverse()
-
-            # Build OpenAI-format history
-            history = []
-            for m in past_messages:
-                role = "user" if m["sender"] == "user" else "assistant"
-                history.append({"role": role, "content": m["message"]})
-            # Append current user message
-            history.append({"role": "user", "content": user_text})
-
-            # Handle explain requests
+            # ✅ Handle explain FIRST, before anything else
             if data.get("type") == "explain":
                 verse_text = data.get("verseText", "")
                 reference = data.get("reference", "")
@@ -283,6 +283,24 @@ async def websocket_chat_endpoint(websocket: WebSocket, session_id: str):
                     "payload": {"for": verse_id, "text": explanation or "Could not generate explanation."}
                 })
                 continue
+
+            user_text = sanitize_input(data.get("message", ""))
+            if not user_text:
+                continue
+
+            lang = "hindi" if any("\u0900" <= ch <= "\u097F" for ch in user_text) else "english"
+
+            # Fetch last 10 messages for context
+            past_messages = await db.chat_messages.find(
+                {"session_id": session_id}
+            ).sort("timestamp", -1).limit(10).to_list(10)
+            past_messages.reverse()
+
+            history = []
+            for m in past_messages:
+                role = "user" if m["sender"] == "user" else "assistant"
+                history.append({"role": role, "content": m["message"]})
+            history.append({"role": "user", "content": user_text})
 
             # Save & Send User Msg
             user_msg = ChatMessage(session_id=session_id, message=user_text, sender="user", language=lang)
@@ -323,7 +341,7 @@ async def create_session():
 
 @api_router.get("/chat/{session_id}")
 async def get_chat_history(session_id: str):
-    messages = await db.chat_messages.find({"session_id": session_id}).sort("timestamp", 1).to_list(50)
+    messages = await db.chat_messages.find({"session_id": session_id}).sort("timestamp", 1).to_list(100)
     for m in messages: m.pop("_id", None)
     return messages
 

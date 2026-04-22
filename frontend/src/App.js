@@ -294,7 +294,7 @@ function LandingPage({ onGetStarted }) {
 }
 
 //Chat Side-bar Component
-function ChatSidebar({ currentSessionId, onSelectSession, onNewChat, isOpen, onClose }) {
+function ChatSidebar({ currentSessionId, onSelectSession, onNewChat, onDeleteSession, isOpen, onClose, sessionVersion }) {
   const [sessions, setSessions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [deletingId, setDeletingId] = useState(null); // tracks which is being deleted
@@ -305,7 +305,7 @@ function ChatSidebar({ currentSessionId, onSelectSession, onNewChat, isOpen, onC
       .then(r => r.json())
       .then(data => { setSessions(data); setLoading(false); })
       .catch(() => setLoading(false));
-  }, [currentSessionId]); // refetch when session changes
+  }, [sessionVersion]); // refetch when session changes
 
   const handleDelete = async (e, sessionId) => {
     e.stopPropagation(); // prevent triggering onSelectSession
@@ -435,7 +435,7 @@ function ChatSidebar({ currentSessionId, onSelectSession, onNewChat, isOpen, onC
 
 // Chat Interface Component
 function ChatInterface({ onBack }) {
-
+  const [sessionVersion, setSessionVersion] = useState(0);
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState([]);
   const [isTyping, setIsTyping] = useState(false);
@@ -474,14 +474,15 @@ function ChatInterface({ onBack }) {
     if (ws) ws.close(); // triggers reconnect with new session ID
   }, [ws]);
 
-  const startNewChat = () => {
-    localStorage.removeItem(SESSION_KEY);
-    sessionIdRef.current = getOrCreateSessionId();
-    setMessages([]);
-    setVerses([]);
-    setVersesOpen(false);
-    if (ws) ws.close();
-  };
+const startNewChat = () => {
+  localStorage.removeItem(SESSION_KEY);
+  sessionIdRef.current = getOrCreateSessionId();
+  setMessages([]);
+  setVerses([]);
+  setVersesOpen(false);
+  setSessionVersion(v => v + 1); // triggers sidebar refetch
+  if (ws) ws.close();
+};
 
   const scrollRef = useRef(null);
   const sessionIdRef = useRef(getOrCreateSessionId());
@@ -732,6 +733,7 @@ function ChatInterface({ onBack }) {
           onDeleteSession={startNewChat}
           isOpen={sidebarOpen}
           onClose={() => setSidebarOpen(false)}
+          sessionVersion={sessionVersion}
         />
         {/* Main Chat Area */}
         <div className="flex-1 flex flex-col">
@@ -769,11 +771,6 @@ function ChatInterface({ onBack }) {
               </div>
 
               <div className="flex items-center gap-3">
-                <button
-                  onClick={startNewChat}
-                  className="px-4 py-2 text-sm font-medium text-gray-300 hover:text-white border border-white/10 rounded-xl hover:bg-white/5 transition-all hover:border-white/20">
-                  New Chat
-                </button>
                 <button
                   onClick={connectWS}
                   className="px-4 py-2 text-sm font-medium text-gray-300 hover:text-white border border-white/10 rounded-xl hover:bg-white/5 transition-all hover:border-white/20"
