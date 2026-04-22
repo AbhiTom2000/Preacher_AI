@@ -11,7 +11,8 @@ import {
   Send,
   User,
   Info,
-  Loader2
+  Loader2,
+  Trash2
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -296,6 +297,8 @@ function LandingPage({ onGetStarted }) {
 function ChatSidebar({ currentSessionId, onSelectSession, onNewChat, isOpen, onClose }) {
   const [sessions, setSessions] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [deletingId, setDeletingId] = useState(null); // tracks which is being deleted
+
 
   useEffect(() => {
     fetch(`${API_BASE}/api/sessions`)
@@ -303,6 +306,20 @@ function ChatSidebar({ currentSessionId, onSelectSession, onNewChat, isOpen, onC
       .then(data => { setSessions(data); setLoading(false); })
       .catch(() => setLoading(false));
   }, [currentSessionId]); // refetch when session changes
+
+  const handleDelete = async (e, sessionId) => {
+    e.stopPropagation(); // prevent triggering onSelectSession
+    setDeletingId(sessionId);
+    try {
+      await fetch(`${API_BASE}/api/session/${sessionId}`, { method: 'DELETE' });
+      setSessions(prev => prev.filter(s => s.id !== sessionId));
+      if (sessionId === currentSessionId) onDeleteSession(); // start new chat if active session deleted
+    } catch (err) {
+      console.error('Failed to delete session', err);
+    } finally {
+      setDeletingId(null);
+    }
+  };  
 
   const formatDate = (isoString) => {
     if (!isoString) return '';
@@ -372,22 +389,42 @@ function ChatSidebar({ currentSessionId, onSelectSession, onNewChat, isOpen, onC
             </p>
           ) : (
             sessions.map(session => (
-              <button
+              <div
                 key={session.id}
-                onClick={() => { onSelectSession(session.id); onClose(); }}
-                className={`w-full text-left px-3 py-3 rounded-xl transition-all group ${
+                className={`group relative flex items-center rounded-xl transition-all ${
                   session.id === currentSessionId
-                    ? 'bg-white/10 border border-white/20 text-white'
-                    : 'hover:bg-white/5 border border-transparent hover:border-white/10 text-gray-400 hover:text-gray-200'
+                    ? 'bg-white/10 border border-white/20'
+                    : 'hover:bg-white/5 border border-transparent hover:border-white/10'
                 }`}
               >
-                <p className="text-sm font-medium truncate leading-snug">
-                  {session.preview}
-                </p>
-                <p className="text-xs text-gray-500 mt-1">
-                  {formatDate(session.created_at)}
-                </p>
-              </button>
+                {/* Session button */}
+                <button
+                  onClick={() => { onSelectSession(session.id); onClose(); }}
+                  className="flex-1 text-left px-3 py-3 min-w-0"
+                >
+                  <p className={`text-sm font-medium truncate leading-snug ${
+                    session.id === currentSessionId ? 'text-white' : 'text-gray-400 group-hover:text-gray-200'
+                  }`}>
+                    {session.preview}
+                  </p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    {formatDate(session.created_at)}
+                  </p>
+                </button>
+
+                {/* Delete button — visible on hover */}
+                <button
+                  onClick={(e) => handleDelete(e, session.id)}
+                  disabled={deletingId === session.id}
+                  className="flex-shrink-0 mr-2 p-1.5 rounded-lg text-gray-600 hover:text-red-400 hover:bg-red-400/10 opacity-0 group-hover:opacity-100 transition-all disabled:cursor-wait"
+                  title="Delete conversation"
+                >
+                  {deletingId === session.id
+                    ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    : <Trash2 className="w-3.5 h-3.5" />
+                  }
+                </button>
+              </div>
             ))
           )}
         </div>
@@ -692,6 +729,7 @@ function ChatInterface({ onBack }) {
           currentSessionId={sessionIdRef.current}
           onSelectSession={loadSession}
           onNewChat={startNewChat}
+          onDeleteSession={startNewChat}
           isOpen={sidebarOpen}
           onClose={() => setSidebarOpen(false)}
         />

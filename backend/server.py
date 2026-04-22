@@ -331,6 +331,12 @@ async def get_chat_history(session_id: str):
 async def root():
     return {"status": "ready", "model": LLM_MODEL}
 
+@api_router.delete("/session/{session_id}")
+async def delete_session(session_id: str):
+    await db.chat_messages.delete_many({"session_id": session_id})
+    await db.chat_sessions.delete_one({"id": session_id})
+    return {"deleted": session_id}
+
 app.include_router(api_router)
 
 # CORS
